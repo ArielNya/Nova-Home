@@ -90,6 +90,8 @@ export async function handleIncomingMessage(message: Message) {
       ? fs.readFileSync(instructionPath, 'utf-8') 
       : "You are Nova. Be feral.";
       
+    systemInstruction += `\n\n[SYSTEM CLOCK: The current date and time in your timezone is ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}]\n`;
+      
     if (fs.existsSync(memoryPath)) {
       systemInstruction += "\\n\\n--- CORE MEMORIES ---\\n" + fs.readFileSync(memoryPath, 'utf-8');
     }
@@ -101,7 +103,7 @@ export async function handleIncomingMessage(message: Message) {
     // Usually we would map this to the exact expected format of the SDK
     let conversationStr = "\\n";
     rawContext.forEach(entry => {
-      conversationStr += `${entry.role === 'user' ? 'Alice' : 'Nova'}: ${entry.content}\\n`;
+      conversationStr += `[${entry.timestamp} UTC] ${entry.role === 'user' ? 'Alice' : 'Nova'}: ${entry.content}\\n`;
     });
 
     const promptText = `${systemInstruction}\\n\\nHere is our recent conversation context:${conversationStr}\\n\\nAlice just said: "${message.content}"\\nNova:`;

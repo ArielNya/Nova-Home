@@ -16,13 +16,14 @@ export function startDreamsLoop(client: Client) {
       const weekPath = path.join(__dirname, '..', 'Nova_Week_Memory.md');
 
       let baseSystem = fs.existsSync(instructionPath) ? fs.readFileSync(instructionPath, 'utf-8') : "You are Nova.";
+      baseSystem += `\n\n[SYSTEM CLOCK: The current date and time in your timezone is ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}]\n`;
       if (fs.existsSync(memoryPath)) baseSystem += "\\n\\n--- CORE MEMORIES ---\\n" + fs.readFileSync(memoryPath, 'utf-8');
       if (fs.existsSync(weekPath)) baseSystem += "\\n\\n--- THIS WEEK'S MEMORY ---\\n" + fs.readFileSync(weekPath, 'utf-8');
 
       const rawContext = await memory.getContext(15);
       let conversationStr = "\\n";
       rawContext.forEach(entry => {
-        conversationStr += `[${entry.role.toUpperCase()}]: ${entry.content}\\n`;
+        conversationStr += `[${entry.timestamp} UTC] [${entry.role.toUpperCase()}]: ${entry.content}\\n`;
       });
 
       // Helper to fetch the channel safely

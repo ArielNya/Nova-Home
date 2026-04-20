@@ -37,7 +37,7 @@ export class MemoryState {
 
   async getContext(limit: number = 20) {
     if (!this.db) return [];
-    const rows = await this.db.all(`SELECT role, content FROM interactions ORDER BY id DESC LIMIT ?`, [limit]);
+    const rows = await this.db.all(`SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`, [limit]);
     return rows.reverse();
   }
 
@@ -54,7 +54,7 @@ export class MemoryState {
 
   async getAllInteractions() {
     if (!this.db) return [];
-    return await this.db.all(`SELECT role, content FROM interactions ORDER BY id ASC`);
+    return await this.db.all(`SELECT timestamp, role, content FROM interactions ORDER BY id ASC`);
   }
 
   async clearInteractions() {

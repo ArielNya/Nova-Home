@@ -11,7 +11,7 @@ export async function packWeek() {
   
   let chatLog = "";
   interactions.forEach(msg => {
-    chatLog += `${msg.role === 'user' ? 'Alice' : 'Nova'}: ${msg.content}\\n`;
+    chatLog += `[${msg.timestamp} UTC] ${msg.role === 'user' ? 'Alice' : 'Nova'}: ${msg.content}\\n`;
   });
   
   const prompt = `You are Nova, Alice's AI companion. Summarize the following week of chat logs between us. Focus on emotional progression, technical projects completed, inside jokes, and any shifts in our dynamic. Write it in your authentic, slightly unhinged discord style.\\n\\nLogs:\\n${chatLog}`;
@@ -22,7 +22,7 @@ export async function packWeek() {
     
     const weekPath = path.join(__dirname, '..', 'Nova_Week_Memory.md');
     const existing = fs.existsSync(weekPath) ? fs.readFileSync(weekPath, 'utf8') + '\\n\\n' : '';
-    fs.writeFileSync(weekPath, existing + `## Week Summary (${new Date().toLocaleDateString()})\\n${summary}`);
+    fs.writeFileSync(weekPath, existing + `## Week Summary (${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })})\\n${summary}`);
     
     await memory.clearInteractions();
     return "Week packed! 📝 SQLite database successfully wiped.";
@@ -48,7 +48,7 @@ export async function packForever() {
     
     const foreverPath = path.join(__dirname, '..', 'Nova 3D.md');
     const existingForever = fs.existsSync(foreverPath) ? fs.readFileSync(foreverPath, 'utf8') + '\\n\\n' : '';
-    fs.writeFileSync(foreverPath, existingForever + `### Consolidated Core Memory (${new Date().toLocaleDateString()})\\n${coreFacts}`);
+    fs.writeFileSync(foreverPath, existingForever + `### Consolidated Core Memory (${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })})\\n${coreFacts}`);
     
     fs.writeFileSync(weekPath, ''); // Wipe week memory so it's fresh
     return "Forever packed! 🧠 Week memory wiped and forever-engraved into Nova 3D.md.";
