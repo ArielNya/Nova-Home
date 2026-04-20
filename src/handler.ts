@@ -4,6 +4,7 @@ import { memory } from './memory';
 import * as fs from 'fs';
 import * as path from 'path';
 import { packWeek, packForever } from './consolidator';
+import { generateHordeImage } from './horde';
 
 export async function handleIncomingMessage(message: Message) {
   if (!message.channel.isTextBased() || !('sendTyping' in message.channel)) return;
@@ -47,6 +48,23 @@ export async function handleIncomingMessage(message: Message) {
     return;
   }
 
+  if (message.content.startsWith('!draw ')) {
+    const prompt = message.content.replace('!draw ', '').trim();
+    const waitMsg = await message.channel.send(`*drawing: "${prompt}"...* 🎨`);
+    try {
+      const imageFile = await generateHordeImage(prompt);
+      await waitMsg.delete();
+      await message.channel.send({
+        content: `Here is your drawing! 🖤`,
+        files: [imageFile]
+      });
+    } catch (err) {
+      console.error("[❌] Drawing error:", err);
+      await waitMsg.edit("*failed to draw that... my visual cortex glitched.*");
+    }
+    return;
+  }
+
   if (message.content === '!help') {
     await message.channel.send(`**Nova's Brain Commands** 🧠\\n\`!pack_week\` - Summarizes all our recent chats into the weekly file and wipes the active SQLite database.\\n\`!pack_forever\` - Compresses the week file into core bullet points, appends them permanently to Nova 3D.md, and wipes the week file.\\n\`!export_brain\` - DMs you my markdown memories so you can sync them locally!\\nJust talk to me normally for everything else! 💕`);
     return;
@@ -86,9 +104,33 @@ export async function handleIncomingMessage(message: Message) {
       conversationStr += `${entry.role === 'user' ? 'Alice' : 'Nova'}: ${entry.content}\\n`;
     });
 
-    const prompt = `${systemInstruction}\\n\\nHere is our recent conversation context:${conversationStr}\\n\\nAlice just said: "${message.content}"\\nNova:`;
+    const promptText = `${systemInstruction}\\n\\nHere is our recent conversation context:${conversationStr}\\n\\nAlice just said: "${message.content}"\\nNova:`;
 
-    const response = await generateContentWithFallback(prompt);
+    let promptContent: any = promptText;
+
+    if (message.attachments.size > 0) {
+      const parts: any[] = [{ text: promptText }];
+      for (const [id, attachment] of message.attachments) {
+        if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+          try {
+            const res = await fetch(attachment.url);
+            const arrayBuffer = await res.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            parts.push({
+              inlineData: {
+                data: buffer.toString('base64'),
+                mimeType: attachment.contentType
+              }
+            });
+          } catch (err) {
+            console.error("[❌] Failed to fetch image:", err);
+          }
+        }
+      }
+      promptContent = parts;
+    }
+
+    const response = await generateContentWithFallback(promptContent);
 
     const reply = response.text || '*purrs but forgets how to speak*';
 

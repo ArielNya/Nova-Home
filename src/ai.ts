@@ -10,7 +10,7 @@ const MODELS_TO_TRY = [
   'gemini-2.5-pro'
 ];
 
-export async function generateContentWithFallback(prompt: string, tools?: any[]) {
+export async function generateContentWithFallback(prompt: string | any[], tools?: any[]) {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
   for (const model of MODELS_TO_TRY) {
