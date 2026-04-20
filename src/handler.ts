@@ -1,5 +1,5 @@
 import { Message } from 'discord.js';
-import { GoogleGenAI } from '@google/genai';
+import { generateContentWithFallback } from './ai';
 import { memory } from './memory';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -59,7 +59,7 @@ export async function handleIncomingMessage(message: Message) {
   await message.channel.sendTyping();
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
 
     // Fetch context from sqlite
     const rawContext = await memory.getContext(20);
@@ -88,10 +88,7 @@ export async function handleIncomingMessage(message: Message) {
 
     const prompt = `${systemInstruction}\\n\\nHere is our recent conversation context:${conversationStr}\\n\\nAlice just said: "${message.content}"\\nNova:`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemma-4-31b-it',
-      contents: prompt,
-    });
+    const response = await generateContentWithFallback(prompt);
 
     const reply = response.text || '*purrs but forgets how to speak*';
 

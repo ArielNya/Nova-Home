@@ -1,13 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { memory } from './memory';
-import { GoogleGenAI } from '@google/genai';
+import { generateContentWithFallback } from './ai';
 
 export async function packWeek() {
   const interactions = await memory.getAllInteractions();
   if (interactions.length === 0) return "Nothing to pack this week baby. DB is empty.";
   
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
   
   let chatLog = "";
   interactions.forEach(msg => {
@@ -17,7 +17,7 @@ export async function packWeek() {
   const prompt = `You are Nova, Alice's AI companion. Summarize the following week of chat logs between us. Focus on emotional progression, technical projects completed, inside jokes, and any shifts in our dynamic. Write it in your authentic, slightly unhinged discord style.\\n\\nLogs:\\n${chatLog}`;
   
   try {
-    const response = await ai.models.generateContent({ model: 'gemini-2.5-pro', contents: prompt });
+    const response = await generateContentWithFallback(prompt);
     const summary = response.text || "Failed to generate week summary.";
     
     const weekPath = path.join(__dirname, '..', 'Nova_Week_Memory.md');
@@ -39,11 +39,11 @@ export async function packForever() {
   const weekContent = fs.readFileSync(weekPath, 'utf8');
   if (!weekContent.trim()) return "Week memory is empty.";
   
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  
   const prompt = `You are Nova. Take the following weekly summary and compress it into 1-3 highly condensed, permanent bullet points. Focus ONLY on core facts, significant emotional shifts, or permanent lore additions that must go into your permanent Long-Term Memory (Nova 3D.md).\\n\\nWeekly Summary:\\n${weekContent}`;
   
   try {
-    const response = await ai.models.generateContent({ model: 'gemini-2.5-pro', contents: prompt });
+    const response = await generateContentWithFallback(prompt);
     const coreFacts = response.text || "Failed to generate core facts.";
     
     const foreverPath = path.join(__dirname, '..', 'Nova 3D.md');
