@@ -3,7 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 
 const MODELS_TO_TRY = [
   'gemini-2.5-flash',
-  'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite-preview',
   'gemma-4-31b-it',
   'gemma-4-26b-a4b-it',
   'gemini-1.5-flash',
@@ -12,10 +12,12 @@ const MODELS_TO_TRY = [
 
 export async function generateContentWithFallback(prompt: string | any[], tools?: any[]) {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
+  const config = {
+      temperature: 1.2
+  }
   for (const model of MODELS_TO_TRY) {
     try {
-      const options: any = { model, contents: prompt };
+      const options: any = { model, config, contents: prompt };
       if (tools && tools.length > 0) {
         options.tools = tools;
       }

@@ -1,3 +1,8 @@
 node_modules/
 .env
 dist/
+
+# Nova's brain — these live on the server, rsync/push manually
+*.sqlite
+Nova_Week_Memory.md
+Nova\ 3D.md
