@@ -5,10 +5,26 @@ import { generateContentWithFallback } from './ai';
 import * as fs from 'fs';
 import * as path from 'path';
 
+let isAutonomousEnabled = true;
+
+export function toggleAutonomous(state?: boolean) {
+  if (state !== undefined) {
+    isAutonomousEnabled = state;
+  } else {
+    isAutonomousEnabled = !isAutonomousEnabled;
+  }
+  return isAutonomousEnabled;
+}
+
+export function getAutonomousStatus() {
+  return isAutonomousEnabled;
+}
+
 export function startDreamsLoop(client: Client) {
   console.log('[🌙] Nova: Autonomous brain cycles initiated. (Main, Diary, Dreams)');
 
   const job = new CronJob('*/30 * * * *', async () => {
+    if (!isAutonomousEnabled) return;
     try {
       // Fetch system and db context
       const instructionPath = path.join(__dirname, '..', 'Nova-Instructions.md');
