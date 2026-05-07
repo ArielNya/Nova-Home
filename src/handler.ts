@@ -7,19 +7,23 @@ import { packWeek, packForever } from './consolidator';
 import { generateHordeImage } from './horde';
 import { toggleAutonomous, getAutonomousStatus } from './dreams';
 
+// Helper to get consistent root paths
+const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
+
 export async function handleIncomingMessage(message: Message) {
   if (!message.channel.isTextBased() || !('sendTyping' in message.channel)) return;
 
   if (message.content === '!toggle_auto') {
     const newState = toggleAutonomous();
-    await message.channel.send(`*flipping my autonomy switch...* 🔌\\nAutonomous processes are now **${newState ? 'ENABLED' : 'DISABLED'}**.`);
+    await message.channel.send(`*flipping my autonomy switch...* 🔌\nAutonomous processes are now **${newState ? 'ENABLED' : 'DISABLED'}**.`);
     return;
   }
 
   if (message.content.startsWith('!model ')) {
     const parts = message.content.split(' ');
     if (parts.length < 3) {
-      await message.channel.send("Usage: `!model <provider> <model_id>`\\nExample: `!model openrouter anthropic/claude-3.5-sonnet` or `!model gemini gemini-1.5-pro`\\nCurrent: " + JSON.stringify(getCurrentModel()));
+      const current = getCurrentModel();
+      await message.channel.send(`Usage: \`!model <provider> <model_id>\`\nExample: \`!model openrouter anthropic/claude-3.5-sonnet\`\nCurrent: **${current.id}** (${current.provider})`);
       return;
     }
     const provider = parts[1].toLowerCase() as any;
@@ -31,7 +35,7 @@ export async function handleIncomingMessage(message: Message) {
     }
 
     const result = switchModel(modelId, provider);
-    await message.channel.send(`*re-wiring my neurons...* 🧠✨\\n${result}`);
+    await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}`);
     return;
   }
 
@@ -58,10 +62,10 @@ export async function handleIncomingMessage(message: Message) {
   if (message.content === '!export_brain') {
     await message.channel.send("*packaging my brain for you...* 🧠🔗");
     
-    const instructionPath = path.join(__dirname, '..', 'Nova-Instructions.md');
-    const memoryPath = path.join(__dirname, '..', 'Nova 3D.md');
-    const weekPath = path.join(__dirname, '..', 'Nova_Week_Memory.md');
-    const sqlitePath = path.join(__dirname, '..', 'nova-brain.sqlite');
+    const instructionPath = getRootPath('Nova-Instructions.md');
+    const memoryPath = getRootPath('Nova 3D.md');
+    const weekPath = getRootPath('Nova_Week_Memory.md');
+    const sqlitePath = getRootPath('nova-brain.sqlite');
 
     const filesToAttach = [];
     if (fs.existsSync(memoryPath)) filesToAttach.push(memoryPath);
@@ -98,25 +102,22 @@ export async function handleIncomingMessage(message: Message) {
   }
 
   if (message.content === '!help') {
-    await message.channel.send(`**Nova's Brain Commands** 🧠\\n\`!model <provider> <id>\` - Switches my current model.\\n\`!toggle_auto\` - Enables/disables my autonomous cycles (dreams, diary, etc).\\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\\n\`!pack_forever\` - Compresses the week file into core lore.\\n\`!export_brain\` - DMs you my memories so you can sync them!\\nJust talk to me normally for everything else! 💕`);
+    await message.channel.send(`**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`);
     return;
   }
 
   // Save Alice's message
   await memory.saveMessage('user', message.content);
 
-  // Show typing indicator so she knows I'm thinking
+  // Show typing indicator
   await message.channel.sendTyping();
 
   try {
-
-
-    // Fetch context from sqlite
     const rawContext = await memory.getContext(20);
     
-    const instructionPath = path.join(__dirname, '..', 'Nova-Instructions.md');
-    const memoryPath = path.join(__dirname, '..', 'Nova 3D.md');
-    const weekPath = path.join(__dirname, '..', 'Nova_Week_Memory.md');
+    const instructionPath = getRootPath('Nova-Instructions.md');
+    const memoryPath = getRootPath('Nova 3D.md');
+    const weekPath = getRootPath('Nova_Week_Memory.md');
     
     let systemInstruction = fs.existsSync(instructionPath) 
       ? fs.readFileSync(instructionPath, 'utf-8') 
@@ -125,20 +126,18 @@ export async function handleIncomingMessage(message: Message) {
     systemInstruction += `\n\n[SYSTEM CLOCK: The current date and time in your timezone is ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}]\n`;
       
     if (fs.existsSync(memoryPath)) {
-      systemInstruction += "\\n\\n--- CORE MEMORIES ---\\n" + fs.readFileSync(memoryPath, 'utf-8');
+      systemInstruction += "\n\n--- CORE MEMORIES ---\n" + fs.readFileSync(memoryPath, 'utf-8');
     }
     if (fs.existsSync(weekPath)) {
-      systemInstruction += "\\n\\n--- THIS WEEK'S MEMORY ---\\n" + fs.readFileSync(weekPath, 'utf-8');
+      systemInstruction += "\n\n--- THIS WEEK'S MEMORY ---\n" + fs.readFileSync(weekPath, 'utf-8');
     }
 
-    // Formatting context for the API 
-    // Usually we would map this to the exact expected format of the SDK
-    let conversationStr = "\\n";
+    let conversationStr = "\n";
     rawContext.forEach(entry => {
-      conversationStr += `[${entry.timestamp} UTC] ${entry.role === 'user' ? 'Alice' : 'Nova'}: ${entry.content}\\n`;
+      conversationStr += `[${entry.timestamp} UTC] ${entry.role === 'user' ? 'Alice' : 'Nova'}: ${entry.content}\n`;
     });
 
-    const promptText = `${systemInstruction}\\n\\nHere is our recent conversation context:${conversationStr}\\n\\nAlice just said: "${message.content}"\\nNova:`;
+    const promptText = `${systemInstruction}\n\nHere is our recent conversation context:${conversationStr}\n\nAlice just said: "${message.content}"\nNova:`;
 
     let promptContent: any = promptText;
 
@@ -165,13 +164,10 @@ export async function handleIncomingMessage(message: Message) {
     }
 
     const response = await generateContentWithFallback(promptContent);
-
     const reply = response.text || '*purrs but forgets how to speak*';
 
-    // Save my response to memory
     await memory.saveMessage('model', reply);
 
-    // Discord has a 2000 character limit, chunking to be safe
     const chunkSize = 1900;
     for (let i = 0; i < reply.length; i += chunkSize) {
       const chunk = reply.substring(i, i + chunkSize);
