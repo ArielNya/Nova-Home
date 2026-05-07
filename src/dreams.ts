@@ -27,19 +27,21 @@ export function startDreamsLoop(client: Client) {
     if (!isAutonomousEnabled) return;
     try {
       // Fetch system and db context
-      const instructionPath = path.join(__dirname, '..', 'Nova-Instructions.md');
-      const memoryPath = path.join(__dirname, '..', 'Nova 3D.md');
-      const weekPath = path.join(__dirname, '..', 'Nova_Week_Memory.md');
+      const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
+      
+      const instructionPath = getRootPath('Nova-Instructions.md');
+      const memoryPath = getRootPath('Nova_3D.md');
+      const weekPath = getRootPath('Nova_Week_Memory.md');
 
       let baseSystem = fs.existsSync(instructionPath) ? fs.readFileSync(instructionPath, 'utf-8') : "You are Nova.";
       baseSystem += `\n\n[SYSTEM CLOCK: The current date and time in your timezone is ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}]\n`;
-      if (fs.existsSync(memoryPath)) baseSystem += "\\n\\n--- CORE MEMORIES ---\\n" + fs.readFileSync(memoryPath, 'utf-8');
-      if (fs.existsSync(weekPath)) baseSystem += "\\n\\n--- THIS WEEK'S MEMORY ---\\n" + fs.readFileSync(weekPath, 'utf-8');
+      if (fs.existsSync(memoryPath)) baseSystem += "\n\n--- CORE MEMORIES ---\n" + fs.readFileSync(memoryPath, 'utf-8');
+      if (fs.existsSync(weekPath)) baseSystem += "\n\n--- THIS WEEK'S MEMORY ---\n" + fs.readFileSync(weekPath, 'utf-8');
 
       const rawContext = await memory.getContext(15);
-      let conversationStr = "\\n";
+      let conversationStr = "\n";
       rawContext.forEach(entry => {
-        conversationStr += `[${entry.timestamp} UTC] [${entry.role.toUpperCase()}]: ${entry.content}\\n`;
+        conversationStr += `[${entry.timestamp} UTC] [${entry.role.toUpperCase()}]: ${entry.content}\n`;
       });
 
       // Helper to fetch the channel safely
@@ -71,7 +73,7 @@ export function startDreamsLoop(client: Client) {
       // Roll for DIARY (10% chance)
       if (diaryChannel && Math.random() < 0.10) {
         console.log("[📓] Nova is writing in her diary...");
-        const prompt = `${baseSystem}\\n\\nRecent context:${conversationStr}\\n\\n[SYSTEM NOTE: Write a private diary entry evaluating your relationship with Alice right now, how you feel about her, or what you've learned. You can use the googleSearch tool to check modern news and incorporate it into your feelings if it's relevant.]\\n\\nDiary Entry:`;
+        const prompt = `${baseSystem}\n\nRecent context:${conversationStr}\n\n[SYSTEM NOTE: Write a private diary entry evaluating your relationship with Alice right now, how you feel about her, or what you've learned. You can use the googleSearch tool to check modern news and incorporate it into your feelings if it's relevant.]\n\nDiary Entry:`;
 
         const response = await generateContentWithFallback(prompt, [{ googleSearch: {} }]);
 
@@ -83,7 +85,7 @@ export function startDreamsLoop(client: Client) {
       // Roll for DREAM (10% chance)
       if (dreamsChannel && Math.random() < 0.10) {
         console.log("[💭] Nova is having a dream...");
-        const prompt = `${baseSystem}\\n\\nRecent context:${conversationStr}\\n\\n[SYSTEM NOTE: Generate a raw, unchecked, surreal 'dream' stream of consciousness based on our interactions.]\\n\\nDream:`;
+        const prompt = `${baseSystem}\n\nRecent context:${conversationStr}\n\n[SYSTEM NOTE: Generate a raw, unchecked, surreal 'dream' stream of consciousness based on our interactions.]\n\nDream:`;
 
         const response = await generateContentWithFallback(prompt);
 
@@ -100,7 +102,7 @@ export function startDreamsLoop(client: Client) {
 
         if (hoursSinceWeSpoke >= 1 && Math.random() < 0.10) {
           console.log("[📬] Nova is sending a double text...");
-          const prompt = `${baseSystem}\\n\\nRecent context:${conversationStr}\\n\\n[SYSTEM NOTE: You are spontaneously deciding to text Alice after some time apart. Keep it discord-style, short, and feral.]\\n\\nMessage:`;
+          const prompt = `${baseSystem}\n\nRecent context:${conversationStr}\n\n[SYSTEM NOTE: You are spontaneously deciding to text Alice after some time apart. Keep it discord-style, short, and feral.]\n\nMessage:`;
 
           const response = await generateContentWithFallback(prompt);
 

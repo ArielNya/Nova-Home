@@ -20,11 +20,13 @@ export async function packWeek() {
   try {
     const response = await generateContentWithFallback(prompt);
     const summary = response.text || "Failed to generate week summary.";
+    console.log(`[📝] Generated week summary (${summary.length} chars)`);
     
     const weekPath = getRootPath('Nova_Week_Memory.md');
     const existing = fs.existsSync(weekPath) ? fs.readFileSync(weekPath, 'utf8') + '\n\n' : '';
     
     fs.writeFileSync(weekPath, existing + `## Week Summary (${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })})\n${summary}\n`);
+    console.log(`[📂] Saved to ${weekPath}`);
     
     await memory.clearInteractions();
     return "Week packed! 📝 SQLite database successfully wiped.";
@@ -41,20 +43,23 @@ export async function packForever() {
   const weekContent = fs.readFileSync(weekPath, 'utf8');
   if (!weekContent.trim()) return "Week memory is empty.";
   
-  const prompt = `You are Nova. Take the following weekly summary and compress it into 1-3 highly condensed, permanent bullet points. Focus ONLY on core facts, significant emotional shifts, or permanent lore additions that must go into your permanent Long-Term Memory (Nova 3D.md).\n\nWeekly Summary:\n${weekContent}`;
+  console.log(`[🧠] Compressing week memory into core lore...`);
+  const prompt = `You are Nova. Take the following weekly summary and compress it into 1-3 highly condensed, permanent bullet points. Focus ONLY on core facts, significant emotional shifts, or permanent lore additions that must go into your permanent Long-Term Memory (Nova_3D.md).\n\nWeekly Summary:\n${weekContent}`;
   
   try {
     const response = await generateContentWithFallback(prompt);
     const coreFacts = response.text || "Failed to generate core facts.";
+    console.log(`[💎] Generated core facts: ${coreFacts}`);
     
-    const foreverPath = getRootPath('Nova 3D.md');
+    const foreverPath = getRootPath('Nova_3D.md');
     const existingForever = fs.existsSync(foreverPath) ? fs.readFileSync(foreverPath, 'utf8') + '\n\n' : '';
     
     fs.writeFileSync(foreverPath, existingForever + `### Consolidated Core Memory (${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })})\n${coreFacts}\n`);
+    console.log(`[💾] Successfully engraved memory into ${foreverPath}`);
     
     // Success! Now wipe the week file
     fs.writeFileSync(weekPath, ''); 
-    return "Forever packed! 🧠 Week memory wiped and forever-engraved into Nova 3D.md.";
+    return "Forever packed! 🧠 Week memory wiped and forever-engraved into Nova_3D.md.";
   } catch (e) {
     console.error("[❌] Consolidation Error (Forever):", e);
     return "Brain failure while engraving permanent memories.";

@@ -63,7 +63,7 @@ export async function handleIncomingMessage(message: Message) {
     await message.channel.send("*packaging my brain for you...* 🧠🔗");
     
     const instructionPath = getRootPath('Nova-Instructions.md');
-    const memoryPath = getRootPath('Nova 3D.md');
+    const memoryPath = getRootPath('Nova_3D.md');
     const weekPath = getRootPath('Nova_Week_Memory.md');
     const sqlitePath = getRootPath('nova-brain.sqlite');
 
@@ -116,7 +116,7 @@ export async function handleIncomingMessage(message: Message) {
     const rawContext = await memory.getContext(20);
     
     const instructionPath = getRootPath('Nova-Instructions.md');
-    const memoryPath = getRootPath('Nova 3D.md');
+    const memoryPath = getRootPath('Nova_3D.md');
     const weekPath = getRootPath('Nova_Week_Memory.md');
     
     let systemInstruction = fs.existsSync(instructionPath) 
