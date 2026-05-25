@@ -9,7 +9,7 @@ export class MemoryState {
   async init() {
     this.db = await open({
       filename: this.dbPath,
-      driver: sqlite3.Database
+      driver: sqlite3.Database,
     });
 
     await this.db.exec(`
@@ -25,7 +25,7 @@ export class MemoryState {
         value TEXT
       );
     `);
-    
+
     console.log('[🧠] Nova: SQLite memory array engaged.');
   }
 
@@ -37,7 +37,10 @@ export class MemoryState {
 
   async getContext(limit: number = 20) {
     if (!this.db) return [];
-    const rows = await this.db.all(`SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`, [limit]);
+    const rows = await this.db.all(
+      `SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`,
+      [limit]
+    );
     return rows.reverse();
   }
 

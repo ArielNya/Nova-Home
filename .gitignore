@@ -1,7 +1,11 @@
 # Dependencies
 node_modules/
 package-lock.json
-
+mood_state.json
+Nova_Diary.md
+Nova_Dreams.md
+offscreen_events.json
+relationship_state.json
 # Build output
 dist/
 out/

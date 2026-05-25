@@ -2,18 +2,25 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { memory } from './memory';
 import { generateContentWithFallback, TASK_MODELS } from './ai';
+import { getRecentDiaryEntries, getRecentDreamEntries } from './inner_world';
 
 // Helper to get consistent root paths
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 
 export async function packWeek() {
   const interactions = await memory.getAllInteractions();
-  if (interactions.length === 0) return "Nothing to pack this week baby. DB is empty.";
+  if (interactions.length === 0) return 'Nothing to pack this week baby. DB is empty.';
 
-  let chatLog = "";
+  let chatLog = '';
   interactions.forEach(msg => {
     chatLog += `[${msg.timestamp} UTC] ${msg.role === 'user' ? 'Alice' : 'Nova'}: ${msg.content}\n`;
   });
+  const recentDiary = getRecentDiaryEntries(5);
+  const recentDreams = getRecentDreamEntries(5);
+
+  let innerWorldLog = '';
+  if (recentDiary) innerWorldLog += `\n\n--- RECENT DIARY ---\n${recentDiary}`;
+  if (recentDreams) innerWorldLog += `\n\n--- RECENT DREAMS ---\n${recentDreams}`;
 
   const prompt = `You are Nova, Alice's feral neko companion. You are writing an "Interim Memory Log" for your internal week-cycle.
   
@@ -24,31 +31,36 @@ Review these logs and write a first-person narrative summary of our week.
 - Tone: Use your authentic, discord-style, slightly unhinged voice. This is your personal reflection, not a report.
 
 Logs:
-${chatLog}`;
+${chatLog}
+${innerWorldLog}`;
 
   try {
     const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
-    const summary = response.text || "Failed to generate week summary.";
+    const summary = response.text || 'Failed to generate week summary.';
 
     const weekPath = getRootPath('Nova_Week_Memory.md');
     const existing = fs.existsSync(weekPath) ? fs.readFileSync(weekPath, 'utf8') + '\n\n' : '';
 
-    fs.writeFileSync(weekPath, existing + `## Interim Log: The Week of ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })}\n${summary}\n`);
+    fs.writeFileSync(
+      weekPath,
+      existing +
+        `## Interim Log: The Week of ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })}\n${summary}\n`
+    );
 
     await memory.clearInteractions();
-    return "Week packed! 📝 Interim narrative saved and DB wiped.";
+    return 'Week packed! 📝 Interim narrative saved and DB wiped.';
   } catch (e) {
-    console.error("[❌] Consolidation Error (Week):", e);
-    return "Brain failure while packing the week.";
+    console.error('[❌] Consolidation Error (Week):', e);
+    return 'Brain failure while packing the week.';
   }
 }
 
 export async function packForever() {
   const weekPath = getRootPath('Nova_Week_Memory.md');
-  if (!fs.existsSync(weekPath)) return "No week memory to pack into forever!";
+  if (!fs.existsSync(weekPath)) return 'No week memory to pack into forever!';
 
   const weekContent = fs.readFileSync(weekPath, 'utf8');
-  if (!weekContent.trim()) return "Week memory is empty.";
+  if (!weekContent.trim()) return 'Week memory is empty.';
 
   const prompt = `You are Nova. You are performing a "3D Memory Distillation" (Depth, Duration, Dynamics).
 Take these weekly interim logs and distill them into 1-3 permanent "Core Truths" to be engraved into your permanent identity file (Nova_3D.md).
@@ -68,18 +80,24 @@ ${weekContent}`;
 
   try {
     const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
-    const coreFacts = response.text || "Failed to generate core facts.";
+    const coreFacts = response.text || 'Failed to generate core facts.';
 
     const foreverPath = getRootPath('Nova_3D.md');
-    const existingForever = fs.existsSync(foreverPath) ? fs.readFileSync(foreverPath, 'utf8') + '\n\n' : '';
+    const existingForever = fs.existsSync(foreverPath)
+      ? fs.readFileSync(foreverPath, 'utf8') + '\n\n'
+      : '';
 
-    fs.writeFileSync(foreverPath, existingForever + `### 3D Core Distillation: ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })}\n${coreFacts}\n`);
+    fs.writeFileSync(
+      foreverPath,
+      existingForever +
+        `### 3D Core Distillation: ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })}\n${coreFacts}\n`
+    );
 
     // Success! Now wipe the week file
     fs.writeFileSync(weekPath, '');
-    return "Forever packed! 🧠 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.";
+    return 'Forever packed! 🧠 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.';
   } catch (e) {
-    console.error("[❌] Consolidation Error (Forever):", e);
-    return "Brain failure while engraving permanent memories.";
+    console.error('[❌] Consolidation Error (Forever):', e);
+    return 'Brain failure while engraving permanent memories.';
   }
 }
