@@ -52,7 +52,11 @@ export function getAutonomousStatus() {
 
 // ==================== TIME HELPERS ====================
 
-const sendChunked = async (channel: TextChannel, text: string, wrapInAsterisks: boolean = false) => {
+const sendChunked = async (
+  channel: TextChannel,
+  text: string,
+  wrapInAsterisks: boolean = false
+) => {
   let cleanText = text.replace(/<antmlThinking>[\s\S]*?<\/antmlThinking>/gi, '').trim();
   if (!cleanText) cleanText = '*void*';
 
