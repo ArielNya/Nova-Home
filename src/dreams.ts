@@ -14,24 +14,23 @@ import { Client, TextChannel } from 'discord.js';
 import { CronJob } from 'cron';
 import { memory } from './memory';
 import { generateContentWithFallback, TASK_MODELS } from './ai';
-import { 
-  appendToDiary, 
-  appendToDreams, 
-  getRecentDiaryEntries, 
-  getRecentDreamEntries 
+import {
+  appendToDiary,
+  appendToDreams,
+  getRecentDiaryEntries,
+  getRecentDreamEntries,
 } from './inner_world';
 import { getMoodContextForPrompt } from './mood_state';
 import { getRelationshipContextForPrompt } from './relationship_state';
-import { driftMood } from './mood_state';   // if you have driftMood exported
+import { driftMood } from './mood_state'; // if you have driftMood exported
 import { generateOffscreenEvents, getRecentOffscreenEvents } from './offscreen_events';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 const instructionPath = getRootPath('Nova-Instructions.md');
 
-
-let systemInstruction = fs.existsSync(instructionPath) 
-  ? fs.readFileSync(instructionPath, 'utf-8') 
-  : "You are Nova.";
+let systemInstruction = fs.existsSync(instructionPath)
+  ? fs.readFileSync(instructionPath, 'utf-8')
+  : 'You are Nova.';
 
 systemInstruction += getMoodContextForPrompt();
 systemInstruction += getRelationshipContextForPrompt();
@@ -52,6 +51,17 @@ export function getAutonomousStatus() {
 }
 
 // ==================== TIME HELPERS ====================
+
+const sendChunked = async (channel: TextChannel, text: string, wrapInAsterisks: boolean = false) => {
+  let cleanText = text.replace(/<antmlThinking>[\s\S]*?<\/antmlThinking>/gi, '').trim();
+  if (!cleanText) cleanText = '*void*';
+
+  const chunkSize = 1900; // safe margin under 2000
+  for (let i = 0; i < cleanText.length; i += chunkSize) {
+    const chunk = cleanText.substring(i, i + chunkSize);
+    await channel.send(wrapInAsterisks ? `*${chunk}*` : chunk);
+  }
+};
 
 function getCurrentHourInSaoPaulo(): number {
   return new Date().getHours(); // Oracle VM is likely set to UTC, but we treat it as São Paulo time context
@@ -264,7 +274,7 @@ export function startDreamsLoop(client: Client) {
         const entry = response.text?.trim() || '*quiet page*';
 
         appendToDiary(entry); // Save to Markdown
-        await diaryChannel.send(entry);
+        await sendChunked(diaryChannel, entry);
       }
 
       // ==================== DREAMS ====================
@@ -295,7 +305,7 @@ You can let recent diary thoughts or feelings bleed into the dream if it feels n
           const dream = response.text?.trim() || '*fading dream*';
 
           appendToDreams(dream); // Save to Markdown
-          await dreamsChannel.send(`*${dream}*`);
+          await sendChunked(dreamsChannel, dream, true);
         }
       }
     } catch (e) {

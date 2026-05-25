@@ -45,11 +45,8 @@ function getOpenRouterTools(tools: any[] = []) {
   const serverTools = [...OPENROUTER_SERVER_TOOLS];
 
   // Merge with any user-provided tools, avoiding duplicates
-  const existingTypes = new Set(tools.map((t) => t.type));
-  const finalTools = [
-    ...tools,
-    ...serverTools.filter((t) => !existingTypes.has(t.type)),
-  ];
+  const existingTypes = new Set(tools.map(t => t.type));
+  const finalTools = [...tools, ...serverTools.filter(t => !existingTypes.has(t.type))];
 
   return finalTools;
 }
@@ -60,7 +57,7 @@ function getGeminiTools(tools: any[] = [], isDefaultConversationRequest: boolean
   }
 
   // Always enable Google Search for normal conversations
-  const hasGoogleSearch = tools.some((tool) => 'googleSearch' in tool);
+  const hasGoogleSearch = tools.some(tool => 'googleSearch' in tool);
 
   if (!hasGoogleSearch) {
     return [...tools, { googleSearch: {} }];
@@ -84,9 +81,10 @@ export async function generateContentWithFallback(
 
   const isDefaultConversationRequest = !preferredModels || preferredModels.length === 0;
 
-  let modelsToTry: ModelConfig[] = preferredModels && preferredModels.length > 0
-    ? [...preferredModels, ...FALLBACK_MODELS]
-    : [currentModel, ...FALLBACK_MODELS.filter(m => m.id !== currentModel.id)];
+  let modelsToTry: ModelConfig[] =
+    preferredModels && preferredModels.length > 0
+      ? [...preferredModels, ...FALLBACK_MODELS]
+      : [currentModel, ...FALLBACK_MODELS.filter(m => m.id !== currentModel.id)];
 
   for (const modelConfig of modelsToTry) {
     try {
@@ -115,7 +113,7 @@ export async function generateContentWithFallback(
           messages = [{ role: 'user', content: prompt }];
         } else if (Array.isArray(prompt)) {
           // Handle multimodal prompts (images, etc.)
-          const content = prompt.map((part) => {
+          const content = prompt.map(part => {
             if (part.text) return { type: 'text', text: part.text };
             if (part.inlineData) {
               return {

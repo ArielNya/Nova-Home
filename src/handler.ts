@@ -16,9 +16,9 @@ import { getMoodContextForPrompt, loadMoodState } from './mood_state';
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 const instructionPath = getRootPath('Nova-Instructions.md');
 
-let systemInstruction = fs.existsSync(instructionPath) 
-  ? fs.readFileSync(instructionPath, 'utf-8') 
-  : "You are Nova.";
+let systemInstruction = fs.existsSync(instructionPath)
+  ? fs.readFileSync(instructionPath, 'utf-8')
+  : 'You are Nova.';
 
 systemInstruction += getMoodContextForPrompt();
 systemInstruction += getRelationshipContextForPrompt();
