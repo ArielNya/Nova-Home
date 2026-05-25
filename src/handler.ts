@@ -23,7 +23,7 @@ export async function handleIncomingMessage(message: Message) {
     const parts = message.content.split(' ');
     if (parts.length < 3) {
       const current = getCurrentModel();
-      await message.channel.send(`Usage: \`!model <provider> <model_id>\`\nExample: \`!model openrouter anthropic/claude-3.5-sonnet\`\nCurrent: **${current.id}** (${current.provider})`);
+      await message.channel.send(`Usage: \`!model <provider> <model_id>\`\nExample: \`!model openrouter deepseek-v4-pro\`\nCurrent: **${current.id}** (${current.provider})`);
       return;
     }
     const provider = parts[1].toLowerCase() as any;
@@ -106,7 +106,7 @@ export async function handleIncomingMessage(message: Message) {
   }
 
   if (message.content === '!help') {
-    await message.channel.send(`**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`);
+    await message.channel.send(`**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. DeepSeek shortcuts: \`deepseek-v4-flash\`, \`deepseek-v4-pro\`.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`);
     return;
   }
 

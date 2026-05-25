@@ -9,6 +9,28 @@ interface ModelConfig {
 
 let currentModel: ModelConfig = { id: "gemma-4-31b-it", provider: "gemini" };
 
+const DEEPSEEK_V4_OPENROUTER_MODELS: Record<string, { reasoningEffort: "high" | "xhigh" }> = {
+  "deepseek/deepseek-v4-flash": { reasoningEffort: "high" },
+  "deepseek/deepseek-v4-flash:free": { reasoningEffort: "high" },
+  "deepseek/deepseek-v4-pro": { reasoningEffort: "xhigh" },
+};
+
+const OPENROUTER_MODEL_ALIASES: Record<string, string> = {
+  "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+  "deepseek-4-flash": "deepseek/deepseek-v4-flash",
+  "deepseek-v4-flash-free": "deepseek/deepseek-v4-flash:free",
+  "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+  "deepseek-4-pro": "deepseek/deepseek-v4-pro",
+};
+
+const OPENROUTER_DEEPSEEK_SERVER_TOOLS = [
+  { type: "openrouter:web_search", parameters: { max_results: 5 } },
+  { type: "openrouter:datetime" },
+  { type: "openrouter:web_fetch" },
+];
+
+const GEMMA_4_DEFAULT_TOOLS = [{ googleSearch: {} }];
+
 const FALLBACK_MODELS: ModelConfig[] = [
   { id: "gemini-2.5-flash", provider: "gemini" },
   { id: "gemini-3.1-flash-lite-preview", provider: "gemini" },
@@ -19,8 +41,9 @@ const FALLBACK_MODELS: ModelConfig[] = [
 ];
 
 export function switchModel(id: string, provider: "gemini" | "openrouter") {
-  currentModel = { id, provider };
-  return `Switched to **${id}** (${provider})`;
+  const resolvedId = provider === "openrouter" ? (OPENROUTER_MODEL_ALIASES[id] || id) : id;
+  currentModel = { id: resolvedId, provider };
+  return `Switched to **${resolvedId}** (${provider})`;
 }
 
 export function getCurrentModel() {
@@ -31,6 +54,43 @@ export const TASK_MODELS: ModelConfig[] = [
   { id: "gemma-4-31b-it", provider: "gemini" },
   { id: "gemma-4-26b-a4b-it", provider: "gemini" }
 ];
+
+function getDeepSeekV4OpenRouterConfig(modelId: string) {
+  return DEEPSEEK_V4_OPENROUTER_MODELS[modelId];
+}
+
+function getOpenRouterTools(modelId: string, tools?: any[]) {
+  const openRouterTools = (tools || []).filter((tool) => tool?.type === "function" || tool?.type?.startsWith?.("openrouter:"));
+  const deepSeekConfig = getDeepSeekV4OpenRouterConfig(modelId);
+
+  if (!deepSeekConfig) {
+    return openRouterTools;
+  }
+
+  const existingToolTypes = new Set(openRouterTools.map((tool) => tool.type));
+  const missingServerTools = OPENROUTER_DEEPSEEK_SERVER_TOOLS.filter((tool) => !existingToolTypes.has(tool.type));
+
+  return [...openRouterTools, ...missingServerTools];
+}
+
+function isGemma4Model(modelId: string) {
+  return modelId.startsWith("gemma-4-");
+}
+
+function getGeminiTools(modelId: string, tools: any[] | undefined, isDefaultConversationRequest: boolean) {
+  if (!isDefaultConversationRequest || !isGemma4Model(modelId)) {
+    return tools || [];
+  }
+
+  const geminiTools = [...(tools || [])];
+  const hasGoogleSearch = geminiTools.some((tool) => "googleSearch" in tool);
+
+  if (!hasGoogleSearch) {
+    geminiTools.push(...GEMMA_4_DEFAULT_TOOLS);
+  }
+
+  return geminiTools;
+}
 
 export async function generateContentWithFallback(
   prompt: string | any[],
@@ -46,6 +106,7 @@ export async function generateContentWithFallback(
   const config = {
     temperature: 1.2,
   };
+  const isDefaultConversationRequest = !preferredModels || preferredModels.length === 0;
 
   // Determine the sequence of models to try
   let modelsToTry: ModelConfig[];
@@ -73,12 +134,14 @@ export async function generateContentWithFallback(
           config,
           contents: prompt,
         };
-        if (tools && tools.length > 0) {
-          options.tools = tools;
+        const geminiTools = getGeminiTools(modelConfig.id, tools, isDefaultConversationRequest);
+        if (geminiTools.length > 0) {
+          options.tools = geminiTools;
         }
         const response = await gemini.models.generateContent(options);
         return { text: response.text };
       } else if (modelConfig.provider === "openrouter") {
+        const deepSeekConfig = getDeepSeekV4OpenRouterConfig(modelConfig.id);
         let messages: any[] = [];
 
         if (typeof prompt === "string") {
@@ -106,8 +169,16 @@ export async function generateContentWithFallback(
           temperature: config.temperature,
         };
 
-        // Note: Gemini specific tools like googleSearch are ignored for OpenRouter
-        // to prevent API errors since tool structures differ wildly.
+        if (deepSeekConfig) {
+          options.reasoning = { effort: deepSeekConfig.reasoningEffort };
+          options.tool_choice = "auto";
+          options.parallel_tool_calls = true;
+        }
+
+        const openRouterTools = getOpenRouterTools(modelConfig.id, tools);
+        if (openRouterTools.length > 0) {
+          options.tools = openRouterTools;
+        }
 
         const response = await openai.chat.completions.create(options);
         return { text: response.choices[0]?.message?.content || "" };

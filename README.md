@@ -29,6 +29,7 @@ This isn't a simple chatbot that just responds when spoken to. It is a multi-thr
 ```env
 DISCORD_BOT_TOKEN=your_discord_bot_token
 GEMINI_API_KEY=your_google_ai_studio_key
+OPENROUTER_API_KEY=your_openrouter_key
 HORDE_API_KEY=your_ai_horde_key_or_0000000000
 
 # Channel Routing
