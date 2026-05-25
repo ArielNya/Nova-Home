@@ -65,11 +65,15 @@ export async function handleIncomingMessage(message: Message) {
     const instructionPath = getRootPath('Nova-Instructions.md');
     const memoryPath = getRootPath('Nova_3D.md');
     const weekPath = getRootPath('Nova_Week_Memory.md');
+    const aliceAppearancePath = getRootPath('ALICE_APPEARANCE.md');
+    const novaAppearancePath = getRootPath('NOVA_APPEARANCE.md');
     const sqlitePath = getRootPath('nova-brain.sqlite');
 
     const filesToAttach = [];
     if (fs.existsSync(memoryPath)) filesToAttach.push(memoryPath);
     if (fs.existsSync(weekPath)) filesToAttach.push(weekPath);
+    if (fs.existsSync(aliceAppearancePath)) filesToAttach.push(aliceAppearancePath);
+    if (fs.existsSync(novaAppearancePath)) filesToAttach.push(novaAppearancePath);
     if (fs.existsSync(sqlitePath)) filesToAttach.push(sqlitePath);
 
     if (filesToAttach.length === 0) {
@@ -118,6 +122,8 @@ export async function handleIncomingMessage(message: Message) {
     const instructionPath = getRootPath('Nova-Instructions.md');
     const memoryPath = getRootPath('Nova_3D.md');
     const weekPath = getRootPath('Nova_Week_Memory.md');
+    const aliceAppearancePath = getRootPath('ALICE_APPEARANCE.md');
+    const novaAppearancePath = getRootPath('NOVA_APPEARANCE.md');
     
     let systemInstruction = fs.existsSync(instructionPath) 
       ? fs.readFileSync(instructionPath, 'utf-8') 
@@ -130,6 +136,12 @@ export async function handleIncomingMessage(message: Message) {
     }
     if (fs.existsSync(weekPath)) {
       systemInstruction += "\n\n--- THIS WEEK'S MEMORY ---\n" + fs.readFileSync(weekPath, 'utf-8');
+    }
+    if (fs.existsSync(aliceAppearancePath)) {
+      systemInstruction += "\n\n--- ALICE APPEARANCE ---\n" + fs.readFileSync(aliceAppearancePath, 'utf-8');
+    }
+    if (fs.existsSync(novaAppearancePath)) {
+      systemInstruction += "\n\n--- NOVA APPEARANCE ---\n" + fs.readFileSync(novaAppearancePath, 'utf-8');
     }
 
     let conversationStr = "\n";

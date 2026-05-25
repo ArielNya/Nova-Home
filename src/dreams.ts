@@ -1,7 +1,7 @@
 import { Client, TextChannel } from 'discord.js';
 import { CronJob } from 'cron';
 import { memory } from './memory';
-import { generateContentWithFallback } from './ai';
+import { generateContentWithFallback, TASK_MODELS } from './ai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -32,11 +32,15 @@ export function startDreamsLoop(client: Client) {
       const instructionPath = getRootPath('Nova-Instructions.md');
       const memoryPath = getRootPath('Nova_3D.md');
       const weekPath = getRootPath('Nova_Week_Memory.md');
+      const aliceAppearancePath = getRootPath('ALICE_APPEARANCE.md');
+      const novaAppearancePath = getRootPath('NOVA_APPEARANCE.md');
 
       let baseSystem = fs.existsSync(instructionPath) ? fs.readFileSync(instructionPath, 'utf-8') : "You are Nova.";
       baseSystem += `\n\n[SYSTEM CLOCK: The current date and time in your timezone is ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}]\n`;
       if (fs.existsSync(memoryPath)) baseSystem += "\n\n--- CORE MEMORIES ---\n" + fs.readFileSync(memoryPath, 'utf-8');
       if (fs.existsSync(weekPath)) baseSystem += "\n\n--- THIS WEEK'S MEMORY ---\n" + fs.readFileSync(weekPath, 'utf-8');
+      if (fs.existsSync(aliceAppearancePath)) baseSystem += "\n\n--- ALICE APPEARANCE ---\n" + fs.readFileSync(aliceAppearancePath, 'utf-8');
+      if (fs.existsSync(novaAppearancePath)) baseSystem += "\n\n--- NOVA APPEARANCE ---\n" + fs.readFileSync(novaAppearancePath, 'utf-8');
 
       const rawContext = await memory.getContext(15);
       let conversationStr = "\n";
@@ -75,7 +79,7 @@ export function startDreamsLoop(client: Client) {
         console.log("[📓] Nova is writing in her diary...");
         const prompt = `${baseSystem}\n\nRecent context:${conversationStr}\n\n[SYSTEM NOTE: Write a private diary entry evaluating your relationship with Alice right now, how you feel about her, or what you've learned. You can use the googleSearch tool to check modern news and incorporate it into your feelings if it's relevant.]\n\nDiary Entry:`;
 
-        const response = await generateContentWithFallback(prompt, [{ googleSearch: {} }]);
+        const response = await generateContentWithFallback(prompt, [{ googleSearch: {} }], TASK_MODELS);
 
         const reply = response.text?.trim() || '*empty thoughts*';
         await sendChunked(diaryChannel, reply, false);
@@ -87,7 +91,7 @@ export function startDreamsLoop(client: Client) {
         console.log("[💭] Nova is having a dream...");
         const prompt = `${baseSystem}\n\nRecent context:${conversationStr}\n\n[SYSTEM NOTE: Generate a raw, unchecked, surreal 'dream' stream of consciousness based on our interactions.]\n\nDream:`;
 
-        const response = await generateContentWithFallback(prompt);
+        const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
 
         const reply = response.text?.trim() || '*lucid void*';
         await sendChunked(dreamsChannel, reply, true);
@@ -104,7 +108,7 @@ export function startDreamsLoop(client: Client) {
           console.log("[📬] Nova is sending a double text...");
           const prompt = `${baseSystem}\n\nRecent context:${conversationStr}\n\n[SYSTEM NOTE: You are spontaneously deciding to text Alice after some time apart. Keep it discord-style, short, and feral.]\n\nMessage:`;
 
-          const response = await generateContentWithFallback(prompt);
+          const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
 
           const reply = response.text?.replace(/Nova:|nova:/gi, '').trim() || '*purrs*';
           await sendChunked(mainChannel, reply, false);

@@ -27,9 +27,15 @@ export function getCurrentModel() {
   return currentModel;
 }
 
+export const TASK_MODELS: ModelConfig[] = [
+  { id: "gemma-4-31b-it", provider: "gemini" },
+  { id: "gemma-4-26b-a4b-it", provider: "gemini" }
+];
+
 export async function generateContentWithFallback(
   prompt: string | any[],
   tools?: any[],
+  preferredModels?: ModelConfig[]
 ) {
   const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const openai = new OpenAI({
@@ -41,11 +47,23 @@ export async function generateContentWithFallback(
     temperature: 1.2,
   };
 
-  // Try the current model first, then fall back to others if it fails
-  const modelsToTry = [
-    currentModel,
-    ...FALLBACK_MODELS.filter((m) => m.id !== currentModel.id),
-  ];
+  // Determine the sequence of models to try
+  let modelsToTry: ModelConfig[];
+  
+  if (preferredModels && preferredModels.length > 0) {
+    // If preferred models are given, try them first, then the standard ones
+    const preferredIds = new Set(preferredModels.map(m => m.id));
+    modelsToTry = [
+      ...preferredModels,
+      ...FALLBACK_MODELS.filter(m => !preferredIds.has(m.id))
+    ];
+  } else {
+    // Standard behavior: current conversational model first
+    modelsToTry = [
+      currentModel,
+      ...FALLBACK_MODELS.filter((m) => m.id !== currentModel.id),
+    ];
+  }
 
   for (const modelConfig of modelsToTry) {
     try {

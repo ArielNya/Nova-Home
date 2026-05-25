@@ -28,6 +28,8 @@ yarn-error.log*
 # (Exclude these if you prefer syncing them manually via !export_brain)
 Nova_3D.md
 Nova_Week_Memory.md
+ALICE_APPEARANCE.md
+NOVA_APPEARANCE.md
 
 # OS files
 .DS_Store
