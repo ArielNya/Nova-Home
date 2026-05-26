@@ -260,63 +260,63 @@ ${unresolved}
     let promptContent: any = promptText;
 
     async function processAttachments(attachments: any) {
-  const imageParts: any[] = [];
-  let textContent = '';
+      const imageParts: any[] = [];
+      let textContent = '';
 
-  for (const [id, attachment] of attachments) {
-    const filename = attachment.name || 'unknown_file';
-    const contentType = attachment.contentType || '';
-    const sizeKB = attachment.size ? (attachment.size / 1024).toFixed(1) : '?';
+      for (const [id, attachment] of attachments) {
+        const filename = attachment.name || 'unknown_file';
+        const contentType = attachment.contentType || '';
+        const sizeKB = attachment.size ? (attachment.size / 1024).toFixed(1) : '?';
 
-    if (contentType.startsWith('image/')) {
-      // Keep existing image vision support
-      try {
-        const res = await fetch(attachment.url);
-        const buffer = Buffer.from(await res.arrayBuffer());
-        imageParts.push({
-          inlineData: {
-            data: buffer.toString('base64'),
-            mimeType: contentType
+        if (contentType.startsWith('image/')) {
+          // Keep existing image vision support
+          try {
+            const res = await fetch(attachment.url);
+            const buffer = Buffer.from(await res.arrayBuffer());
+            imageParts.push({
+              inlineData: {
+                data: buffer.toString('base64'),
+                mimeType: contentType,
+              },
+            });
+          } catch (err) {
+            console.error('[❌] Failed to fetch image:', err);
           }
-        });
-      } catch (err) {
-        console.error("[❌] Failed to fetch image:", err);
-      }
-    } else {
-      // Handle text files and other non-image attachments
-      try {
-        if (attachment.size && attachment.size > 200 * 1024) {
-          textContent += `\n\n[Attached file: ${filename} (${sizeKB} KB) — too large to read fully]`;
-          continue;
+        } else {
+          // Handle text files and other non-image attachments
+          try {
+            if (attachment.size && attachment.size > 200 * 1024) {
+              textContent += `\n\n[Attached file: ${filename} (${sizeKB} KB) — too large to read fully]`;
+              continue;
+            }
+
+            const res = await fetch(attachment.url);
+            const fileText = await res.text();
+
+            textContent += `\n\n[Attached file: ${filename}]\n${fileText}`;
+          } catch (err) {
+            console.error('[❌] Failed to read attachment:', filename, err);
+            textContent += `\n\n[Attached file: ${filename} — could not read content]`;
+          }
         }
-
-        const res = await fetch(attachment.url);
-        const fileText = await res.text();
-
-        textContent += `\n\n[Attached file: ${filename}]\n${fileText}`;
-      } catch (err) {
-        console.error("[❌] Failed to read attachment:", filename, err);
-        textContent += `\n\n[Attached file: ${filename} — could not read content]`;
       }
-    }
-  }
 
-  return { imageParts, textContent };
-}
+      return { imageParts, textContent };
+    }
 
     // ==================== HELPER: Send long messages safely ====================
-const sendChunked = async (channel: any, text: string) => {
-  // Remove any hidden thinking tags if they somehow leak
-  const cleanText = text.replace(/<antmlThinking>[\s\S]*?<\/antmlThinking>/gi, '').trim();
+    const sendChunked = async (channel: any, text: string) => {
+      // Remove any hidden thinking tags if they somehow leak
+      const cleanText = text.replace(/<antmlThinking>[\s\S]*?<\/antmlThinking>/gi, '').trim();
 
-  const chunkSize = 1900;
-  for (let i = 0; i < cleanText.length; i += chunkSize) {
-    const chunk = cleanText.substring(i, i + chunkSize);
-    await channel.send(chunk);
-  }
-};
-    
-	let extraTextFromFiles = '';
+      const chunkSize = 1900;
+      for (let i = 0; i < cleanText.length; i += chunkSize) {
+        const chunk = cleanText.substring(i, i + chunkSize);
+        await channel.send(chunk);
+      }
+    };
+
+    let extraTextFromFiles = '';
 
     if (message.attachments.size > 0) {
       const { imageParts, textContent } = await processAttachments(message.attachments);
@@ -338,7 +338,6 @@ const sendChunked = async (channel: any, text: string) => {
 
     // Proper chunked sending
     await sendChunked(message.channel, reply);
-    
   } catch (error) {
     console.error('[❌] Brain failure:', error);
     await message.channel.send('*my brain is lagging, something broke...*');

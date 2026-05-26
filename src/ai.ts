@@ -1,5 +1,5 @@
 // @ts-ignore - Bypass ESM/CommonJS restriction since the SDK natively supports both
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import OpenAI from 'openai';
 
 interface ModelConfig {
@@ -51,21 +51,21 @@ function getOpenRouterTools(tools: any[] = []) {
   return finalTools;
 }
 
-function getGeminiTools(tools: any[] = [], isDefaultConversationRequest: boolean) {
-  if (!isDefaultConversationRequest) {
-    return tools;
+function getGeminiTools(
+  modelId: string,
+  tools: any[] | undefined,
+  isDefaultConversationRequest: boolean
+) {
+  const geminiTools = [...(tools || [])];
+  const hasGoogleSearch = geminiTools.some(tool => 'googleSearch' in tool);
+
+  // Always try to enable googleSearch for Gemini models (especially Gemma)
+  if (!hasGoogleSearch && isDefaultConversationRequest) {
+    geminiTools.push({ googleSearch: {} });
   }
 
-  // Always enable Google Search for normal conversations
-  const hasGoogleSearch = tools.some(tool => 'googleSearch' in tool);
-
-  if (!hasGoogleSearch) {
-    return [...tools, { googleSearch: {} }];
-  }
-
-  return tools;
+  return geminiTools;
 }
-
 // ==================== MAIN GENERATION FUNCTION ====================
 
 export async function generateContentWithFallback(
@@ -89,22 +89,29 @@ export async function generateContentWithFallback(
   for (const modelConfig of modelsToTry) {
     try {
       if (modelConfig.provider === 'gemini') {
-        const geminiTools = getGeminiTools(tools, isDefaultConversationRequest);
+        const geminiTools = getGeminiTools(modelConfig.id, tools, isDefaultConversationRequest);
+
+        const geminiConfig: any = {
+          temperature: 1.2,
+          tools: geminiTools.length > 0 ? geminiTools : undefined,
+        };
+
+        // Add high thinking level (helps with tool use / search quality)
+        if (isDefaultConversationRequest) {
+          geminiConfig.thinkingConfig = {
+            thinkingLevel: ThinkingLevel.HIGH,
+          };
+        }
 
         const options: any = {
           model: modelConfig.id,
-          config: { temperature: 1.2 },
+          config: geminiConfig,
           contents: prompt,
         };
-
-        if (geminiTools.length > 0) {
-          options.tools = geminiTools;
-        }
 
         const response = await gemini.models.generateContent(options);
         return { text: response.text };
       }
-
       // ==================== OPENROUTER (DeepSeek, etc.) ====================
       else if (modelConfig.provider === 'openrouter') {
         let messages: any[] = [];
