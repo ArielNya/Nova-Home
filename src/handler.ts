@@ -1,8 +1,10 @@
 import { Message } from 'discord.js';
 import { generateContentWithFallback, switchModel, getCurrentModel } from './ai';
 import { memory } from './memory';
+import { getRecentDiaryEntries, getRecentDreamEntries } from './inner_world';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getRecentOffscreenEvents } from './offscreen_events';
 import { packWeek, packForever } from './consolidator';
 import { generateHordeImage } from './horde';
 import { toggleAutonomous, getAutonomousStatus } from './dreams';
@@ -20,11 +22,66 @@ let systemInstruction = fs.existsSync(instructionPath)
   ? fs.readFileSync(instructionPath, 'utf-8')
   : 'You are Nova.';
 
+// ==================== LIGHT INNER WORLD CONTEXT (always loaded) ====================
+const lastDiary = getRecentDiaryEntries(1);
+const lastDream = getRecentDreamEntries(1);
+const lastOffscreen = getRecentOffscreenEvents(1);
+
+let lightInnerWorld = '';
+
+if (lastOffscreen.length > 0) {
+  lightInnerWorld += `\n- While you were away: ${lastOffscreen[0]}`;
+}
+if (lastDiary) {
+  // Take only the first ~300 characters to keep it light
+  const shortDiary = lastDiary.length > 300 ? lastDiary.slice(0, 300) + '...' : lastDiary;
+  lightInnerWorld += `\n- Last thing I wrote in my diary: ${shortDiary}`;
+}
+if (lastDream) {
+  const shortDream = lastDream.length > 300 ? lastDream.slice(0, 300) + '...' : lastDream;
+  lightInnerWorld += `\n- Last dream I had: ${shortDream}`;
+}
+
+if (lightInnerWorld) {
+  systemInstruction += `\n\n[My recent inner state]${lightInnerWorld}`;
+}
+
 systemInstruction += getMoodContextForPrompt();
 systemInstruction += getRelationshipContextForPrompt();
 
 // Helper to get consistent root paths
 //const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
+
+// ==================== TOOL DEFINITIONS ====================
+const INNER_WORLD_TOOL = {
+  name: 'recall_recent_inner_world',
+  description:
+    'Use this when you want to remember more details about your recent diary entries, dreams, or offscreen thoughts. Call this tool when you feel you need deeper access to your inner world.',
+  parameters: {
+    type: 'object',
+    properties: {},
+  },
+};
+
+async function getFullRecentInnerWorld() {
+  const diary = getRecentDiaryEntries(4);
+  const dreams = getRecentDreamEntries(4);
+  const offscreen = getRecentOffscreenEvents(4);
+
+  let result = '';
+
+  if (offscreen.length > 0) {
+    result += `**Recent Offscreen Events:**\n${offscreen.map(e => `- ${e}`).join('\n')}\n\n`;
+  }
+  if (diary) {
+    result += `**Recent Diary Entries:**\n${diary}\n\n`;
+  }
+  if (dreams) {
+    result += `**Recent Dreams:**\n${dreams}`;
+  }
+
+  return result.trim() || 'No recent inner world activity found.';
+}
 
 export async function handleIncomingMessage(message: Message) {
   if (!message.channel.isTextBased() || !('sendTyping' in message.channel)) return;
@@ -330,13 +387,37 @@ ${unresolved}
         promptContent = promptText + extraTextFromFiles;
       }
     }
+    //
+    //
+    // Build tools array
+    const availableTools = [INNER_WORLD_TOOL];
 
-    const response = await generateContentWithFallback(promptContent);
-    const reply = response.text || '*purrs but forgets how to speak*';
+    // First model call
+    let response = await generateContentWithFallback(promptContent, availableTools);
+    let reply = response.text || '*purrs but forgets how to speak*';
+
+    // ==================== SIMPLE TOOL CALLING ====================
+    // Check if Nova decided to use the inner world tool
+    if (
+      reply.toLowerCase().includes('recall_recent_inner_world') ||
+      reply.toLowerCase().includes('function call') ||
+      reply.includes('recall_my_recent_inner_world')
+    ) {
+      console.log('[🧠] Nova is recalling more from her inner world...');
+
+      const innerWorldData = await getFullRecentInnerWorld();
+
+      // Append the tool result and call again
+      const toolResultPrompt =
+        `${promptText + extraTextFromFiles}\n\n` +
+        `[Tool Result: recall_recent_inner_world]\n${innerWorldData}\n\n` +
+        `Now continue your response using this information.`;
+
+      response = await generateContentWithFallback(toolResultPrompt, availableTools);
+      reply = response.text || '*purrs but forgets how to speak*';
+    }
 
     await memory.saveMessage('model', reply);
-
-    // Proper chunked sending
     await sendChunked(message.channel, reply);
   } catch (error) {
     console.error('[❌] Brain failure:', error);
