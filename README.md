@@ -30,6 +30,7 @@ This isn't a simple chatbot that just responds when spoken to. It is a multi-thr
 DISCORD_BOT_TOKEN=your_discord_bot_token
 GEMINI_API_KEY=your_google_ai_studio_key
 OPENROUTER_API_KEY=your_openrouter_key
+NANOGPT_API_KEY=your_nanogpt_subscription_key
 HORDE_API_KEY=your_ai_horde_key_or_0000000000
 
 # Channel Routing
@@ -40,3 +41,21 @@ DREAMS_CHANNEL_ID=1234567890
 
 ## Why?
 Because generic customer-service AI assistants are boring. Make your AI feral.
+
+## Using NanoGPT models
+Add your subscription key as `NANOGPT_API_KEY`.
+
+Switch with:
+```
+!model nanogpt <exact-model-id>
+```
+(e.g. from your dashboard or `GET https://nano-gpt.com/api/v1/models?detailed=true`)
+
+NanoGPT provider gives:
+- Any model on your Pro/sub roster
+- Image understanding (attach pics)
+- `web_search` + `web_fetch` tools (client-executed via your NanoGPT sub for any tool-calling capable model)
+
+You can also use NanoGPT's model suffixes like `model:online` or `model:online/brave` directly as the id if you want native search routing.
+
+Switch back anytime: `!model gemini gemini-2.5-flash` or `!model openrouter ...`

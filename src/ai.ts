@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 
 interface ModelConfig {
   id: string;
-  provider: 'gemini' | 'openrouter';
+  provider: 'gemini' | 'openrouter' | 'nanogpt';
 }
 
 let currentModel: ModelConfig = { id: 'gemma-4-31b-it', provider: 'gemini' };
@@ -24,7 +24,7 @@ const FALLBACK_MODELS: ModelConfig[] = [
   { id: 'gemini-2.5-pro', provider: 'gemini' },
 ];
 
-export function switchModel(id: string, provider: 'gemini' | 'openrouter') {
+export function switchModel(id: string, provider: 'gemini' | 'openrouter' | 'nanogpt') {
   currentModel = { id, provider };
   return `Switched to **${id}** (${provider})`;
 }
@@ -66,6 +66,133 @@ function getGeminiTools(
 
   return geminiTools;
 }
+
+// ==================== NANOGPT WEB TOOLS (client-side, using your subscription) ====================
+// These give ANY model on the NanoGPT roster (that supports tool calling) access to web search + fetch.
+
+const WEB_SEARCH_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'web_search',
+    description: 'Search the web for up-to-date information, news, facts, or current events. Always use this for anything time-sensitive or external knowledge.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Clear search query' },
+      },
+      required: ['query'],
+    },
+  },
+};
+
+const WEB_FETCH_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'web_fetch',
+    description: 'Fetch and read the main text content of a specific webpage URL. Use after web_search when you need the full details from a promising link.',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The full http(s) URL to fetch' },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+const NANO_GPT_WEB_TOOLS = [WEB_SEARCH_TOOL, WEB_FETCH_TOOL];
+
+async function performWebSearch(query: string): Promise<string> {
+  const apiKey = process.env.NANOGPT_API_KEY;
+  if (!apiKey) return 'Web search unavailable (no NANOGPT_API_KEY).';
+
+  try {
+    const res = await fetch('https://nano-gpt.com/api/v1/data/web/search', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        provider: 'linkup',
+        depth: 'standard',
+        outputType: 'sourcedAnswer',
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      return `Search failed (${res.status}): ${errText.slice(0, 200)}`;
+    }
+
+    const data = await res.json();
+    // Try to give the model a clean, useful summary
+    if (data?.data && typeof data.data === 'string') {
+      return `Search results for "${query}":\n${data.data}`;
+    }
+    if (Array.isArray(data?.data)) {
+      return `Search results for "${query}":\n` + data.data.map((r: any, i: number) =>
+        `${i + 1}. ${r.title || r.name || ''} — ${r.url || r.link || ''}\n   ${r.snippet || r.summary || r.content || ''}`
+      ).join('\n');
+    }
+    return `Search results:\n${JSON.stringify(data).slice(0, 3000)}`;
+  } catch (e: any) {
+    return `Web search error: ${e.message || e}`;
+  }
+}
+
+async function performWebFetch(url: string): Promise<string> {
+  try {
+    const res = await fetch(url, { headers: { 'User-Agent': 'Nova-Discord/1.0' } });
+    if (!res.ok) return `Fetch failed: ${res.status} ${res.statusText}`;
+    const text = await res.text();
+    // Crude but effective: strip tags + collapse whitespace + truncate
+    const cleaned = text
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const excerpt = cleaned.slice(0, 7000);
+    return `Content from ${url} (first ~7k chars):\n${excerpt}`;
+  } catch (e: any) {
+    return `Fetch error for ${url}: ${e.message || e}`;
+  }
+}
+
+async function executeTool(name: string, args: any = {}): Promise<string> {
+  if (name === 'recall_recent_inner_world' || name === 'recall_my_recent_inner_world') {
+    // Dynamic import avoids init cycle (inner_world -> offscreen -> ai)
+    const mod = await import('./inner_world.js');
+    return mod.getFullRecentInnerWorld();
+  }
+  if (name === 'web_search') {
+    return performWebSearch(args.query || args.q || '');
+  }
+  if (name === 'web_fetch') {
+    return performWebFetch(args.url || '');
+  }
+  return `Unknown tool: ${name}`;
+}
+
+function convertToStandardTools(tools: any[] = []): any[] {
+  return tools.map(t => {
+    if (t.type === 'function' && t.function) return t;
+    if (t.name) {
+      return {
+        type: 'function' as const,
+        function: {
+          name: t.name,
+          description: t.description || '',
+          parameters: t.parameters || { type: 'object', properties: {} },
+        },
+      };
+    }
+    return t;
+  });
+}
+
 // ==================== MAIN GENERATION FUNCTION ====================
 
 export async function generateContentWithFallback(
@@ -73,11 +200,34 @@ export async function generateContentWithFallback(
   tools: any[] = [],
   preferredModels?: ModelConfig[]
 ) {
-  const gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const openai = new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: process.env.OPENROUTER_API_KEY || 'dummy-key-to-prevent-crash',
-  });
+  // Clients created on demand inside the loop to support multiple providers cleanly
+  let gemini: GoogleGenAI | null = null;
+  let orClient: OpenAI | null = null;
+  let nanoClient: OpenAI | null = null;
+
+  function getGemini() {
+    if (!gemini) gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    return gemini;
+  }
+  function getORClient() {
+    if (!orClient) {
+      orClient = new OpenAI({
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: process.env.OPENROUTER_API_KEY || 'dummy-key-to-prevent-crash',
+      });
+    }
+    return orClient;
+  }
+  function getNanoClient() {
+    if (!nanoClient) {
+      // Subscription-only base so only models from the NanoGPT Pro/sub roster are available
+      nanoClient = new OpenAI({
+        baseURL: 'https://nano-gpt.com/api/subscription/v1',
+        apiKey: process.env.NANOGPT_API_KEY || 'dummy-key-to-prevent-crash',
+      });
+    }
+    return nanoClient;
+  }
 
   const isDefaultConversationRequest = !preferredModels || preferredModels.length === 0;
 
@@ -86,9 +236,33 @@ export async function generateContentWithFallback(
       ? [...preferredModels, ...FALLBACK_MODELS]
       : [currentModel, ...FALLBACK_MODELS.filter(m => m.id !== currentModel.id)];
 
+  // Shared helper to turn our prompt (string or gemini-style parts) into OpenAI chat messages
+  function buildMessagesFromPrompt(p: string | any[]): any[] {
+    if (typeof p === 'string') {
+      return [{ role: 'user', content: p }];
+    }
+    if (Array.isArray(p)) {
+      const content = p.map(part => {
+        if (part.text) return { type: 'text', text: part.text };
+        if (part.inlineData) {
+          return {
+            type: 'image_url',
+            image_url: {
+              url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+            },
+          };
+        }
+        return { type: 'text', text: JSON.stringify(part) };
+      });
+      return [{ role: 'user', content }];
+    }
+    return [{ role: 'user', content: '' }];
+  }
+
   for (const modelConfig of modelsToTry) {
     try {
       if (modelConfig.provider === 'gemini') {
+        const g = getGemini();
         const geminiTools = getGeminiTools(modelConfig.id, tools, isDefaultConversationRequest);
 
         const geminiConfig: any = {
@@ -109,32 +283,14 @@ export async function generateContentWithFallback(
           contents: prompt,
         };
 
-        const response = await gemini.models.generateContent(options);
+        const response = await g.models.generateContent(options);
         return { text: response.text };
       }
-      // ==================== OPENROUTER (DeepSeek, etc.) ====================
+
+      // ==================== OPENROUTER (DeepSeek, etc. — keep server tools behavior) ====================
       else if (modelConfig.provider === 'openrouter') {
-        let messages: any[] = [];
-
-        if (typeof prompt === 'string') {
-          messages = [{ role: 'user', content: prompt }];
-        } else if (Array.isArray(prompt)) {
-          // Handle multimodal prompts (images, etc.)
-          const content = prompt.map(part => {
-            if (part.text) return { type: 'text', text: part.text };
-            if (part.inlineData) {
-              return {
-                type: 'image_url',
-                image_url: {
-                  url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-                },
-              };
-            }
-            return { type: 'text', text: JSON.stringify(part) };
-          });
-          messages = [{ role: 'user', content }];
-        }
-
+        const client = getORClient();
+        const messages = buildMessagesFromPrompt(prompt);
         const openRouterTools = getOpenRouterTools(tools);
 
         const options: any = {
@@ -151,8 +307,67 @@ export async function generateContentWithFallback(
           options.parallel_tool_calls = true;
         }
 
-        const response = await openai.chat.completions.create(options);
+        const response = await client.chat.completions.create(options);
         return { text: response.choices[0]?.message?.content || '' };
+      }
+
+      // ==================== NANOGPT (any model from your Pro/sub roster) ====================
+      else if (modelConfig.provider === 'nanogpt') {
+        const client = getNanoClient();
+        let messages = buildMessagesFromPrompt(prompt);
+
+        // Always give NanoGPT models the inner-world tool + our web search/fetch
+        // (converted to standard OpenAI function format). Models that support tool_calling will use them.
+        const standardPassedTools = convertToStandardTools(tools);
+        const nanoTools = [...standardPassedTools, ...NANO_GPT_WEB_TOOLS];
+
+        const optionsBase: any = {
+          model: modelConfig.id,
+          temperature: 1.2,
+          tools: nanoTools.length > 0 ? nanoTools : undefined,
+        };
+
+        // Bounded tool-calling loop so web_search / web_fetch / recall can actually run
+        const MAX_ROUNDS = 4;
+        for (let round = 0; round < MAX_ROUNDS; round++) {
+          const resp = await client.chat.completions.create({
+            ...optionsBase,
+            messages,
+          });
+
+          const msg = resp.choices[0]?.message;
+          if (!msg) break;
+
+          const toolCalls = msg.tool_calls;
+          if (toolCalls && toolCalls.length > 0) {
+            // Push the assistant message that requested tools
+            messages.push(msg);
+
+            for (const tc of toolCalls) {
+              // OpenAI SDK types are a union; use any access for function tool calls
+              const funcPart: any = (tc as any).function || tc;
+              const name = funcPart?.name || '';
+              let args: any = {};
+              try {
+                args = funcPart?.arguments ? JSON.parse(funcPart.arguments) : {};
+              } catch {}
+              const resultText = await executeTool(name, args);
+              messages.push({
+                role: 'tool',
+                tool_call_id: (tc as any).id,
+                content: String(resultText),
+              });
+            }
+            // Continue loop — model will get the tool results in next turn
+            continue;
+          }
+
+          // No more tool calls — final answer
+          return { text: msg.content || '' };
+        }
+
+        // If we exhausted rounds, return whatever we have
+        return { text: '' };
       }
     } catch (e: any) {
       console.log(

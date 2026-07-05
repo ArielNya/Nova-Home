@@ -1,7 +1,7 @@
 import { Message } from 'discord.js';
 import { generateContentWithFallback, switchModel, getCurrentModel } from './ai';
 import { memory } from './memory';
-import { getRecentDiaryEntries, getRecentDreamEntries } from './inner_world';
+import { getRecentDiaryEntries, getRecentDreamEntries, getFullRecentInnerWorld } from './inner_world';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getRecentOffscreenEvents } from './offscreen_events';
@@ -63,26 +63,6 @@ const INNER_WORLD_TOOL = {
   },
 };
 
-async function getFullRecentInnerWorld() {
-  const diary = getRecentDiaryEntries(4);
-  const dreams = getRecentDreamEntries(4);
-  const offscreen = getRecentOffscreenEvents(4);
-
-  let result = '';
-
-  if (offscreen.length > 0) {
-    result += `**Recent Offscreen Events:**\n${offscreen.map(e => `- ${e}`).join('\n')}\n\n`;
-  }
-  if (diary) {
-    result += `**Recent Diary Entries:**\n${diary}\n\n`;
-  }
-  if (dreams) {
-    result += `**Recent Dreams:**\n${dreams}`;
-  }
-
-  return result.trim() || 'No recent inner world activity found.';
-}
-
 export async function handleIncomingMessage(message: Message) {
   if (!message.channel.isTextBased() || !('sendTyping' in message.channel)) return;
 
@@ -99,15 +79,15 @@ export async function handleIncomingMessage(message: Message) {
     if (parts.length < 3) {
       const current = getCurrentModel();
       await message.channel.send(
-        `Usage: \`!model <provider> <model_id>\`\nExample: \`!model openrouter deepseek-v4-pro\`\nCurrent: **${current.id}** (${current.provider})`
+        `Usage: \`!model <provider> <model_id>\`\nExample: \`!model openrouter deepseek-v4-pro\` or \`!model nanogpt <model-from-your-roster>\`\nCurrent: **${current.id}** (${current.provider})`
       );
       return;
     }
     const provider = parts[1].toLowerCase() as any;
     const modelId = parts[2];
 
-    if (provider !== 'gemini' && provider !== 'openrouter') {
-      await message.channel.send('Provider must be either `gemini` or `openrouter`!');
+    if (provider !== 'gemini' && provider !== 'openrouter' && provider !== 'nanogpt') {
+      await message.channel.send('Provider must be `gemini`, `openrouter` or `nanogpt`!');
       return;
     }
 
@@ -266,7 +246,7 @@ ${unresolved}
 
   if (message.content === '!help') {
     await message.channel.send(
-      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. DeepSeek shortcuts: \`deepseek-v4-flash\`, \`deepseek-v4-pro\`.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
+      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`.\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
     );
     return;
   }

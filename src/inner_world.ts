@@ -1,6 +1,7 @@
 // inner_world.ts
 import * as fs from 'fs';
 import * as path from 'path';
+import { getRecentOffscreenEvents } from './offscreen_events';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 
@@ -69,4 +70,25 @@ export function getRecentInnerWorld(diaryLimit: number = 2, dreamLimit: number =
   }
 
   return result.trim();
+}
+
+// Full recent context for tool use (diary + dreams + offscreen). Used by both handler and NanoGPT tool executor.
+export function getFullRecentInnerWorld(): string {
+  const diary = getRecentDiaryEntries(4);
+  const dreams = getRecentDreamEntries(4);
+  const offscreen = getRecentOffscreenEvents(4);
+
+  let result = '';
+
+  if (offscreen.length > 0) {
+    result += `**Recent Offscreen Events:**\n${offscreen.map(e => `- ${e}`).join('\n')}\n\n`;
+  }
+  if (diary) {
+    result += `**Recent Diary Entries:**\n${diary}\n\n`;
+  }
+  if (dreams) {
+    result += `**Recent Dreams:**\n${dreams}`;
+  }
+
+  return result.trim() || 'No recent inner world activity found.';
 }
