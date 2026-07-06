@@ -2,6 +2,20 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import OpenAI from 'openai';
 
+// Module-level NanoGPT client (subscription-only) for chat + image generation
+let nanoClient: OpenAI | null = null;
+
+export function getNanoClient() {
+  if (!nanoClient) {
+    // Subscription-only base so only models from the NanoGPT Pro/sub roster are available
+    nanoClient = new OpenAI({
+      baseURL: 'https://nano-gpt.com/api/subscription/v1',
+      apiKey: process.env.NANOGPT_API_KEY || 'dummy-key-to-prevent-crash',
+    });
+  }
+  return nanoClient;
+}
+
 interface ModelConfig {
   id: string;
   provider: 'gemini' | 'openrouter' | 'nanogpt';
@@ -203,7 +217,6 @@ export async function generateContentWithFallback(
   // Clients created on demand inside the loop to support multiple providers cleanly
   let gemini: GoogleGenAI | null = null;
   let orClient: OpenAI | null = null;
-  let nanoClient: OpenAI | null = null;
 
   function getGemini() {
     if (!gemini) gemini = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -217,16 +230,6 @@ export async function generateContentWithFallback(
       });
     }
     return orClient;
-  }
-  function getNanoClient() {
-    if (!nanoClient) {
-      // Subscription-only base so only models from the NanoGPT Pro/sub roster are available
-      nanoClient = new OpenAI({
-        baseURL: 'https://nano-gpt.com/api/subscription/v1',
-        apiKey: process.env.NANOGPT_API_KEY || 'dummy-key-to-prevent-crash',
-      });
-    }
-    return nanoClient;
   }
 
   const isDefaultConversationRequest = !preferredModels || preferredModels.length === 0;
@@ -378,4 +381,34 @@ export async function generateContentWithFallback(
   }
 
   throw new Error('All fallback models failed.');
+}
+
+// ==================== NANOGPT IMAGE GENERATION (replaces AI Horde) ====================
+// Uses the subscription-only path so only roster-included image models are available.
+// Always returns a Buffer (b64_json) so handler can attach directly.
+
+export async function generateImage(prompt: string, model?: string): Promise<Buffer> {
+  const client = getNanoClient();
+  // Keep the exact anime-style enhancement that was used with Horde
+  const enhancedPrompt = prompt + ', high quality anime style digital art, highly detailed';
+
+  const response = await client.images.generate({
+    // If no model provided, let NanoGPT use its default (or whatever your subscription roster allows)
+    ...(model ? { model } : {}),
+    prompt: enhancedPrompt,
+    n: 1,
+    size: '1024x1024',
+    response_format: 'b64_json',
+  });
+
+  const data = response.data;
+  if (!data || !data[0]) {
+    throw new Error('NanoGPT did not return image data');
+  }
+  const b64 = data[0].b64_json;
+  if (!b64) {
+    throw new Error('NanoGPT did not return image data (b64_json)');
+  }
+
+  return Buffer.from(b64, 'base64');
 }

@@ -1,12 +1,11 @@
 import { Message } from 'discord.js';
-import { generateContentWithFallback, switchModel, getCurrentModel } from './ai';
+import { generateContentWithFallback, switchModel, getCurrentModel, generateImage } from './ai';
 import { memory } from './memory';
 import { getRecentDiaryEntries, getRecentDreamEntries, getFullRecentInnerWorld } from './inner_world';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getRecentOffscreenEvents } from './offscreen_events';
 import { packWeek, packForever } from './consolidator';
-import { generateHordeImage } from './horde';
 import { toggleAutonomous, getAutonomousStatus } from './dreams';
 import {
   getRelationshipContextForPrompt,
@@ -192,14 +191,26 @@ ${unresolved}
     return;
   }
   if (message.content.startsWith('!draw ')) {
-    const prompt = message.content.replace('!draw ', '').trim();
-    const waitMsg = await message.channel.send(`*drawing: "${prompt}"...* 🎨`);
+    let rest = message.content.replace('!draw ', '').trim();
+
+    // Support choosing model: !draw model=flux-pro a cute neko
+    // or !draw model:flux-pro a cute neko
+    let imageModel: string | undefined;
+    const modelMatch = rest.match(/^(?:model[:=]|--model\s+)([^\s]+)\s+(.+)$/i);
+    if (modelMatch) {
+      imageModel = modelMatch[1];
+      rest = modelMatch[2];
+    }
+
+    const prompt = rest;
+    const modelLabel = imageModel ? ` [${imageModel}]` : '';
+    const waitMsg = await message.channel.send(`*drawing${modelLabel}: "${prompt}"...* 🎨`);
     try {
-      const imageFile = await generateHordeImage(prompt);
+      const imageBuffer = await generateImage(prompt, imageModel);
       await waitMsg.delete();
       await message.channel.send({
         content: `Here is your drawing! 🖤`,
-        files: [imageFile],
+        files: [{ attachment: imageBuffer, name: 'drawing.png' }],
       });
     } catch (err) {
       console.error('[❌] Drawing error:', err);
@@ -246,7 +257,7 @@ ${unresolved}
 
   if (message.content === '!help') {
     await message.channel.send(
-      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`.\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
+      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
     );
     return;
   }

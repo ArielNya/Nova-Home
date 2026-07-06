@@ -14,7 +14,7 @@ This isn't a simple chatbot that just responds when spoken to. It is a multi-thr
 * **Persistent Memory Architecture**: 
   * Uses `sqlite3` for a short-term interaction log.
   * A `consolidator` that periodically packs weekly memory databases into permanent, highly-condensed markdown lore files (`Nova 3D.md`). These core memories are organically injected back into the AI's system prompt.
-* **AI Horde Integration**: The bot can independently generate and drop images (selfies, dreams) via the distributed AI Horde network.
+* **NanoGPT Image Generation**: `!draw <prompt>` generates images using your NanoGPT subscription (subscription-only API path).
 
 ## Setup Instructions
 
@@ -31,7 +31,6 @@ DISCORD_BOT_TOKEN=your_discord_bot_token
 GEMINI_API_KEY=your_google_ai_studio_key
 OPENROUTER_API_KEY=your_openrouter_key
 NANOGPT_API_KEY=your_nanogpt_subscription_key
-HORDE_API_KEY=your_ai_horde_key_or_0000000000
 
 # Channel Routing
 MAIN_CHANNEL_ID=1234567890
@@ -55,6 +54,8 @@ NanoGPT provider gives:
 - Any model on your Pro/sub roster
 - Image understanding (attach pics)
 - `web_search` + `web_fetch` tools (client-executed via your NanoGPT sub for any tool-calling capable model)
+- `!draw <prompt>` - Generates anime-style images via the subscription-only image API
+- `!draw model=<model> <prompt>` - Choose a specific image model from your roster, e.g. `!draw model=flux-pro cute neko in hoodie` (model omitted = NanoGPT default)
 
 You can also use NanoGPT's model suffixes like `model:online` or `model:online/brave` directly as the id if you want native search routing.
 
