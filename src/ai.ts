@@ -2,7 +2,7 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import OpenAI from 'openai';
 
-// Module-level NanoGPT client (subscription-only) for chat + image generation
+// Module-level NanoGPT client (subscription-only) for chat
 let nanoClient: OpenAI | null = null;
 
 export function getNanoClient() {
@@ -14,6 +14,21 @@ export function getNanoClient() {
     });
   }
   return nanoClient;
+}
+
+// Separate client for image generation.
+// NanoGPT uses https://nano-gpt.com/v1/images/generations for the OpenAI-compatible image API.
+// Subscription-included models (like "chroma") are available when using your sub key here.
+let nanoImageClient: OpenAI | null = null;
+
+function getNanoImageClient() {
+  if (!nanoImageClient) {
+    nanoImageClient = new OpenAI({
+      baseURL: 'https://nano-gpt.com/v1',
+      apiKey: process.env.NANOGPT_API_KEY || 'dummy-key-to-prevent-crash',
+    });
+  }
+  return nanoImageClient;
 }
 
 interface ModelConfig {
@@ -388,12 +403,12 @@ export async function generateContentWithFallback(
 // Always returns a Buffer (b64_json) so handler can attach directly.
 
 export async function generateImage(prompt: string, model?: string): Promise<Buffer> {
-  const client = getNanoClient();
+  const client = getNanoImageClient();
   // Keep the exact anime-style enhancement that was used with Horde
   const enhancedPrompt = prompt + ', high quality anime style digital art, highly detailed';
 
   const response = await client.images.generate({
-    // If no model provided, let NanoGPT use its default (or whatever your subscription roster allows)
+    // model from your subscription roster, e.g. "chroma", "hidream", "flux-pro" etc.
     ...(model ? { model } : {}),
     prompt: enhancedPrompt,
     n: 1,
