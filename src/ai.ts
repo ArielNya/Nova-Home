@@ -31,10 +31,30 @@ function getNanoImageClient() {
   return nanoImageClient;
 }
 
+let deepseekClient: OpenAI | null = null;
+
+function getDeepSeekClient() {
+  if (!deepseekClient) {
+    deepseekClient = new OpenAI({
+      baseURL: 'https://api.deepseek.com',
+      apiKey: process.env.DEEPSEEK_API_KEY || 'dummy-key-to-prevent-crash',
+    });
+  }
+  return deepseekClient;
+}
+
+export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek';
+
 interface ModelConfig {
   id: string;
-  provider: 'gemini' | 'openrouter' | 'nanogpt';
+  provider: Provider;
 }
+
+export const DEEPSEEK_MODELS = [
+  'deepseek-v4-flash',
+  'deepseek-v4-pro',
+  'deepseek-v4-flash-vision-exp',
+] as const;
 
 let currentModel: ModelConfig = { id: 'gemma-4-31b-it', provider: 'gemini' };
 
@@ -53,7 +73,7 @@ const FALLBACK_MODELS: ModelConfig[] = [
   { id: 'gemini-2.5-pro', provider: 'gemini' },
 ];
 
-export function switchModel(id: string, provider: 'gemini' | 'openrouter' | 'nanogpt') {
+export function switchModel(id: string, provider: Provider) {
   currentModel = { id, provider };
   return `Switched to **${id}** (${provider})`;
 }
@@ -240,6 +260,48 @@ function convertToStandardTools(tools: any[] = []): any[] {
   });
 }
 
+async function runOpenAIToolLoop(
+  client: OpenAI,
+  messages: any[],
+  optionsBase: any
+): Promise<string> {
+  const MAX_ROUNDS = 4;
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const resp = await client.chat.completions.create({
+      ...optionsBase,
+      messages,
+    });
+
+    const msg: any = resp.choices[0]?.message;
+    if (!msg) break;
+
+    const toolCalls = msg.tool_calls;
+    if (toolCalls && toolCalls.length > 0) {
+      // Keep the raw assistant message (DeepSeek needs reasoning_content on tool turns)
+      messages.push(msg);
+
+      for (const tc of toolCalls) {
+        const funcPart: any = tc.function || tc;
+        const name = funcPart?.name || '';
+        let args: any = {};
+        try {
+          args = funcPart?.arguments ? JSON.parse(funcPart.arguments) : {};
+        } catch {}
+        const resultText = await executeTool(name, args);
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: String(resultText),
+        });
+      }
+      continue;
+    }
+
+    return msg.content || '';
+  }
+  return '';
+}
+
 // ==================== MAIN GENERATION FUNCTION ====================
 
 export async function generateContentWithFallback(
@@ -350,60 +412,30 @@ export async function generateContentWithFallback(
       // ==================== NANOGPT (any model from your Pro/sub roster) ====================
       else if (modelConfig.provider === 'nanogpt') {
         const client = getNanoClient();
-        let messages = buildMessagesFromPrompt(prompt);
+        const messages = buildMessagesFromPrompt(prompt);
+        const nanoTools = [...convertToStandardTools(tools), ...NANO_GPT_WEB_TOOLS];
 
-        // Always give NanoGPT models the inner-world tool + our web search/fetch
-        // (converted to standard OpenAI function format). Models that support tool_calling will use them.
-        const standardPassedTools = convertToStandardTools(tools);
-        const nanoTools = [...standardPassedTools, ...NANO_GPT_WEB_TOOLS];
-
-        const optionsBase: any = {
+        const text = await runOpenAIToolLoop(client, messages, {
           model: modelConfig.id,
           temperature: 1.2,
           tools: nanoTools.length > 0 ? nanoTools : undefined,
-        };
+        });
+        return { text };
+      }
 
-        // Bounded tool-calling loop so web_search / web_fetch / recall can actually run
-        const MAX_ROUNDS = 4;
-        for (let round = 0; round < MAX_ROUNDS; round++) {
-          const resp = await client.chat.completions.create({
-            ...optionsBase,
-            messages,
-          });
+      // ==================== DEEPSEEK (official API) ====================
+      else if (modelConfig.provider === 'deepseek') {
+        const client = getDeepSeekClient();
+        const messages = buildMessagesFromPrompt(prompt);
+        const deepseekTools = convertToStandardTools(tools);
 
-          const msg = resp.choices[0]?.message;
-          if (!msg) break;
-
-          const toolCalls = msg.tool_calls;
-          if (toolCalls && toolCalls.length > 0) {
-            // Push the assistant message that requested tools
-            messages.push(msg);
-
-            for (const tc of toolCalls) {
-              // OpenAI SDK types are a union; use any access for function tool calls
-              const funcPart: any = (tc as any).function || tc;
-              const name = funcPart?.name || '';
-              let args: any = {};
-              try {
-                args = funcPart?.arguments ? JSON.parse(funcPart.arguments) : {};
-              } catch {}
-              const resultText = await executeTool(name, args);
-              messages.push({
-                role: 'tool',
-                tool_call_id: (tc as any).id,
-                content: String(resultText),
-              });
-            }
-            // Continue loop — model will get the tool results in next turn
-            continue;
-          }
-
-          // No more tool calls — final answer
-          return { text: msg.content || '' };
-        }
-
-        // If we exhausted rounds, return whatever we have
-        return { text: '' };
+        const text = await runOpenAIToolLoop(client, messages, {
+          model: modelConfig.id,
+          tools: deepseekTools.length > 0 ? deepseekTools : undefined,
+          reasoning_effort: isDefaultConversationRequest ? 'high' : 'low',
+          thinking: { type: isDefaultConversationRequest ? 'enabled' : 'disabled' },
+        });
+        return { text };
       }
     } catch (e: any) {
       console.log(

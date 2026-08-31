@@ -1,7 +1,18 @@
 import { Message } from 'discord.js';
-import { generateContentWithFallback, switchModel, getCurrentModel, generateImage } from './ai';
+import {
+  generateContentWithFallback,
+  switchModel,
+  getCurrentModel,
+  generateImage,
+  DEEPSEEK_MODELS,
+  type Provider,
+} from './ai';
 import { memory } from './memory';
-import { getRecentDiaryEntries, getRecentDreamEntries, getFullRecentInnerWorld } from './inner_world';
+import {
+  getRecentDiaryEntries,
+  getRecentDreamEntries,
+  getFullRecentInnerWorld,
+} from './inner_world';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getRecentOffscreenEvents } from './offscreen_events';
@@ -73,31 +84,43 @@ export async function handleIncomingMessage(message: Message) {
     return;
   }
 
-  if (message.content.startsWith('!model ')) {
-    const parts = message.content.split(' ');
+  if (message.content.startsWith('!model ') || message.content === '!model') {
+    const parts = message.content.split(/\s+/).filter(Boolean);
+    const current = getCurrentModel();
+    const deepseekList = DEEPSEEK_MODELS.map(m => `\`!model deepseek ${m}\``).join('\n');
+
     if (parts.length < 3) {
-      const current = getCurrentModel();
+      if (parts[1]?.toLowerCase() === 'deepseek') {
+        await message.channel.send(
+          `**DeepSeek models** (official API):\n${deepseekList}\n\nCurrent: **${current.id}** (${current.provider})`
+        );
+        return;
+      }
       await message.channel.send(
-        `Usage: \`!model <provider> <model_id>\`\nExample: \`!model openrouter deepseek-v4-pro\` or \`!model nanogpt <model-from-your-roster>\`\nCurrent: **${current.id}** (${current.provider})`
+        `I'm currently using **${current.id}** (${current.provider})! 💕\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`\n\n**DeepSeek:**\n${deepseekList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
       );
       return;
     }
-    const provider = parts[1].toLowerCase() as any;
+
+    const provider = parts[1].toLowerCase() as Provider;
     const modelId = parts[2];
 
-    if (provider !== 'gemini' && provider !== 'openrouter' && provider !== 'nanogpt') {
-      await message.channel.send('Provider must be `gemini`, `openrouter` or `nanogpt`!');
+    if (!['gemini', 'openrouter', 'nanogpt', 'deepseek'].includes(provider)) {
+      await message.channel.send(
+        'Provider must be `gemini`, `openrouter`, `nanogpt` or `deepseek`!'
+      );
+      return;
+    }
+
+    if (provider === 'deepseek' && !(DEEPSEEK_MODELS as readonly string[]).includes(modelId)) {
+      await message.channel.send(
+        `Unknown DeepSeek model \`${modelId}\`.\nOptions:\n${deepseekList}`
+      );
       return;
     }
 
     const result = switchModel(modelId, provider);
     await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}`);
-    return;
-  }
-
-  if (message.content === '!model') {
-    const current = getCurrentModel();
-    await message.channel.send(`I'm currently using **${current.id}** (${current.provider})! 💕`);
     return;
   }
 
@@ -257,7 +280,7 @@ ${unresolved}
 
   if (message.content === '!help') {
     await message.channel.send(
-      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
+      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model deepseek deepseek-v4-pro\`, \`!model deepseek deepseek-v4-flash\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`. Type \`!model\` for the full list.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
     );
     return;
   }

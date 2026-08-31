@@ -30,6 +30,7 @@ This isn't a simple chatbot that just responds when spoken to. It is a multi-thr
 DISCORD_BOT_TOKEN=your_discord_bot_token
 GEMINI_API_KEY=your_google_ai_studio_key
 OPENROUTER_API_KEY=your_openrouter_key
+DEEPSEEK_API_KEY=your_deepseek_api_key
 NANOGPT_API_KEY=your_nanogpt_subscription_key
 
 # Channel Routing
@@ -40,6 +41,17 @@ DREAMS_CHANNEL_ID=1234567890
 
 ## Why?
 Because generic customer-service AI assistants are boring. Make your AI feral.
+
+## Using DeepSeek (official API)
+Add your key as `DEEPSEEK_API_KEY` from https://platform.deepseek.com
+
+Switch with:
+```
+!model deepseek deepseek-v4-pro
+!model deepseek deepseek-v4-flash
+!model deepseek deepseek-v4-flash-vision-exp
+```
+(`!model deepseek` lists them. Vision model is the one that can see attached images.)
 
 ## Using NanoGPT models
 Add your subscription key as `NANOGPT_API_KEY`.
