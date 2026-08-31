@@ -1,5 +1,6 @@
 import sqlite3 from 'sqlite3';
 import { open, Database } from 'sqlite';
+import fs from 'fs';
 import path from 'path';
 
 export class MemoryState {
@@ -7,9 +8,37 @@ export class MemoryState {
   private dbPath = path.join(__dirname, '..', 'nova-brain.sqlite');
 
   async init() {
+    this.dbPath = path.resolve(this.dbPath);
+
+    try {
+      fs.accessSync(path.dirname(this.dbPath), fs.constants.W_OK);
+    } catch {
+      throw new Error(
+        `[🧠] Memory directory is not writable: ${path.dirname(this.dbPath)}. SQLite needs to create journal files there.`
+      );
+    }
+
+    if (fs.existsSync(this.dbPath)) {
+      try {
+        fs.chmodSync(this.dbPath, 0o664);
+      } catch (e) {
+        console.warn(`[🧠] Could not chmod ${this.dbPath}:`, e);
+      }
+    }
+
+    if (this.db) {
+      try {
+        await this.db.close();
+      } catch {
+        /* already closed / replaced on disk */
+      }
+      this.db = null;
+    }
+
     this.db = await open({
       filename: this.dbPath,
       driver: sqlite3.Database,
+      mode: sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
     });
 
     await this.db.exec(`
@@ -26,43 +55,85 @@ export class MemoryState {
       );
     `);
 
-    console.log('[🧠] Nova: SQLite memory array engaged.');
+    console.log(`[🧠] Nova: SQLite memory array engaged at ${this.dbPath}`);
+  }
+
+  private isReadonlyError(e: unknown): boolean {
+    const err = e as { code?: string; message?: string };
+    return err?.code === 'SQLITE_READONLY' || String(err?.message || e).includes('SQLITE_READONLY');
+  }
+
+  private logReadonlyDiagnostics() {
+    try {
+      const st = fs.statSync(this.dbPath);
+      const dir = path.dirname(this.dbPath);
+      const dst = fs.statSync(dir);
+      console.error(
+        `[🧠] SQLITE_READONLY diag: path=${this.dbPath} file_mode=${(st.mode & 0o777).toString(8)} file_uid=${st.uid} dir_mode=${(dst.mode & 0o777).toString(8)} dir_uid=${dst.uid} pid_uid=${process.getuid?.()}`
+      );
+    } catch (e) {
+      console.error('[🧠] SQLITE_READONLY diag failed:', e);
+    }
+  }
+
+  private async withDb<T>(fn: (db: Database) => Promise<T>): Promise<T> {
+    if (!this.db) throw new Error('DB not initialized');
+    try {
+      return await fn(this.db);
+    } catch (e) {
+      if (!this.isReadonlyError(e)) throw e;
+      this.logReadonlyDiagnostics();
+      console.warn(
+        '[🧠] SQLite went readonly — reopening (file may have been replaced while I was running).'
+      );
+      await this.init();
+      return await fn(this.db!);
+    }
   }
 
   async saveMessage(role: 'user' | 'model' | 'diary' | 'dream', content: string) {
-    if (!this.db) return;
-    await this.db.run(`INSERT INTO interactions (role, content) VALUES (?, ?)`, [role, content]);
-    await this.setMeta('last_interaction', Date.now().toString());
+    await this.withDb(async db => {
+      await db.run(`INSERT INTO interactions (role, content) VALUES (?, ?)`, [role, content]);
+      await db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [
+        'last_interaction',
+        Date.now().toString(),
+      ]);
+    });
   }
 
   async getContext(limit: number = 20) {
-    if (!this.db) return [];
-    const rows = await this.db.all(
-      `SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`,
-      [limit]
-    );
-    return rows.reverse();
+    return this.withDb(async db => {
+      const rows = await db.all(
+        `SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`,
+        [limit]
+      );
+      return rows.reverse();
+    });
   }
 
   async getMeta(key: string): Promise<string | null> {
-    if (!this.db) return null;
-    const row = await this.db.get(`SELECT value FROM metadata WHERE key = ?`, [key]);
-    return row ? row.value : null;
+    return this.withDb(async db => {
+      const row = await db.get(`SELECT value FROM metadata WHERE key = ?`, [key]);
+      return row ? row.value : null;
+    });
   }
 
   async setMeta(key: string, value: string) {
-    if (!this.db) return;
-    await this.db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [key, value]);
+    await this.withDb(async db => {
+      await db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [key, value]);
+    });
   }
 
   async getAllInteractions() {
-    if (!this.db) return [];
-    return await this.db.all(`SELECT timestamp, role, content FROM interactions ORDER BY id ASC`);
+    return this.withDb(async db => {
+      return await db.all(`SELECT timestamp, role, content FROM interactions ORDER BY id ASC`);
+    });
   }
 
   async clearInteractions() {
-    if (!this.db) return;
-    await this.db.run(`DELETE FROM interactions`);
+    await this.withDb(async db => {
+      await db.run(`DELETE FROM interactions`);
+    });
   }
 }
 

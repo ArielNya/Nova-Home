@@ -9,6 +9,7 @@ relationship_state.json
 # Build output
 dist/
 out/
+*.sqlite
 
 # Environment secrets
 .env

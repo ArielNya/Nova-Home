@@ -51,7 +51,8 @@ ${innerWorldLog}`;
     return 'Week packed! 📝 Interim narrative saved and DB wiped.';
   } catch (e) {
     console.error('[❌] Consolidation Error (Week):', e);
-    return 'Brain failure while packing the week.';
+    const msg = e instanceof Error ? e.message : String(e);
+    return `Brain failure while packing the week: ${msg}`;
   }
 }
 
@@ -98,6 +99,7 @@ ${weekContent}`;
     return 'Forever packed! 🧠 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.';
   } catch (e) {
     console.error('[❌] Consolidation Error (Forever):', e);
-    return 'Brain failure while engraving permanent memories.';
+    const msg = e instanceof Error ? e.message : String(e);
+    return `Brain failure while engraving permanent memories: ${msg}`;
   }
 }

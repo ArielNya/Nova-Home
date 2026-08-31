@@ -67,6 +67,16 @@ export const TASK_MODELS: ModelConfig[] = [
   { id: 'gemma-4-26b-a4b-it', provider: 'gemini' },
 ];
 
+/** Models love wrapping JSON in ```json fences. Pull out the object anyway. */
+export function parseJsonFromLlm<T = any>(text: string): T {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) {
+    throw new SyntaxError('No JSON object in LLM response');
+  }
+  return JSON.parse(text.slice(start, end + 1));
+}
+
 // ==================== TOOL HELPERS ====================
 
 function getOpenRouterTools(tools: any[] = []) {
@@ -103,7 +113,8 @@ const WEB_SEARCH_TOOL = {
   type: 'function' as const,
   function: {
     name: 'web_search',
-    description: 'Search the web for up-to-date information, news, facts, or current events. Always use this for anything time-sensitive or external knowledge.',
+    description:
+      'Search the web for up-to-date information, news, facts, or current events. Always use this for anything time-sensitive or external knowledge.',
     parameters: {
       type: 'object',
       properties: {
@@ -118,7 +129,8 @@ const WEB_FETCH_TOOL = {
   type: 'function' as const,
   function: {
     name: 'web_fetch',
-    description: 'Fetch and read the main text content of a specific webpage URL. Use after web_search when you need the full details from a promising link.',
+    description:
+      'Fetch and read the main text content of a specific webpage URL. Use after web_search when you need the full details from a promising link.',
     parameters: {
       type: 'object',
       properties: {
@@ -161,9 +173,15 @@ async function performWebSearch(query: string): Promise<string> {
       return `Search results for "${query}":\n${data.data}`;
     }
     if (Array.isArray(data?.data)) {
-      return `Search results for "${query}":\n` + data.data.map((r: any, i: number) =>
-        `${i + 1}. ${r.title || r.name || ''} — ${r.url || r.link || ''}\n   ${r.snippet || r.summary || r.content || ''}`
-      ).join('\n');
+      return (
+        `Search results for "${query}":\n` +
+        data.data
+          .map(
+            (r: any, i: number) =>
+              `${i + 1}. ${r.title || r.name || ''} — ${r.url || r.link || ''}\n   ${r.snippet || r.summary || r.content || ''}`
+          )
+          .join('\n')
+      );
     }
     return `Search results:\n${JSON.stringify(data).slice(0, 3000)}`;
   } catch (e: any) {

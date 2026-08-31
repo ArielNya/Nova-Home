@@ -1,7 +1,7 @@
 // relationship_state.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateContentWithFallback, TASK_MODELS } from './ai';
+import { generateContentWithFallback, parseJsonFromLlm, TASK_MODELS } from './ai';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 const STATE_FILE = getRootPath('relationship_state.json');
@@ -76,7 +76,7 @@ Respond ONLY with valid JSON in this exact format:
 
   try {
     const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
-    const newState = JSON.parse(response.text || '{}');
+    const newState = parseJsonFromLlm(response.text || '{}');
 
     const updatedState: RelationshipState = {
       temperature: newState.temperature || currentState.temperature,

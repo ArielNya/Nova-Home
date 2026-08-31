@@ -1,7 +1,7 @@
 // mood_state.ts
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateContentWithFallback, TASK_MODELS } from './ai';
+import { generateContentWithFallback, parseJsonFromLlm, TASK_MODELS } from './ai';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 const MOOD_FILE = getRootPath('mood_state.json');
@@ -75,7 +75,7 @@ Respond with ONLY valid JSON in this format:
 
   try {
     const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
-    const newMood = JSON.parse(response.text || '{}');
+    const newMood = parseJsonFromLlm(response.text || '{}');
 
     const updatedState: MoodState = {
       mood: newMood.mood || current.mood,
