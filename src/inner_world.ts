@@ -42,7 +42,6 @@ export function getRecentDiaryEntries(limit: number = 3): string {
   ensureFileExists(DIARY_FILE);
   const content = fs.readFileSync(DIARY_FILE, 'utf-8');
 
-  // Split by entries and get the most recent ones
   const entries = content.split('---').filter(e => e.trim().length > 20);
   return entries.slice(-limit).join('\n---\n').trim();
 }
@@ -55,7 +54,26 @@ export function getRecentDreamEntries(limit: number = 3): string {
   return entries.slice(-limit).join('\n---\n').trim();
 }
 
-// Optional: Get a combined view of recent inner world
+export function toResidue(text: string, max = 180): string {
+  if (!text) return '';
+  const cleaned = text
+    .replace(/^#+ .*$/gm, '')
+    .replace(/^---+$/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  if (cleaned.length <= max) return cleaned;
+  return cleaned.slice(0, max).replace(/\s+\S*$/, '') + '…';
+}
+
+export function getDiaryResidue(): string {
+  return toResidue(getRecentDiaryEntries(1), 180);
+}
+
+export function getDreamResidue(): string {
+  return toResidue(getRecentDreamEntries(1), 160);
+}
+
 export function getRecentInnerWorld(diaryLimit: number = 2, dreamLimit: number = 2): string {
   const diary = getRecentDiaryEntries(diaryLimit);
   const dreams = getRecentDreamEntries(dreamLimit);
@@ -72,7 +90,6 @@ export function getRecentInnerWorld(diaryLimit: number = 2, dreamLimit: number =
   return result.trim();
 }
 
-// Full recent context for tool use (diary + dreams + offscreen). Used by both handler and NanoGPT tool executor.
 export function getFullRecentInnerWorld(): string {
   const diary = getRecentDiaryEntries(4);
   const dreams = getRecentDreamEntries(4);

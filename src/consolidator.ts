@@ -4,7 +4,6 @@ import { memory } from './memory';
 import { generateContentWithFallback, TASK_MODELS } from './ai';
 import { getRecentDiaryEntries, getRecentDreamEntries } from './inner_world';
 
-// Helper to get consistent root paths
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 
 export async function packWeek() {
@@ -48,9 +47,9 @@ ${innerWorldLog}`;
     );
 
     await memory.clearInteractions();
-    return 'Week packed! 📝 Interim narrative saved and DB wiped.';
+    return 'Week packed! Interim narrative saved and DB wiped.';
   } catch (e) {
-    console.error('[❌] Consolidation Error (Week):', e);
+    console.error('[x] Consolidation Error (Week):', e);
     const msg = e instanceof Error ? e.message : String(e);
     return `Brain failure while packing the week: ${msg}`;
   }
@@ -94,12 +93,60 @@ ${weekContent}`;
         `### 3D Core Distillation: ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })}\n${coreFacts}\n`
     );
 
-    // Success! Now wipe the week file
     fs.writeFileSync(weekPath, '');
-    return 'Forever packed! 🧠 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.';
+    return 'Forever packed! 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.';
   } catch (e) {
-    console.error('[❌] Consolidation Error (Forever):', e);
+    console.error('[x] Consolidation Error (Forever):', e);
     const msg = e instanceof Error ? e.message : String(e);
     return `Brain failure while engraving permanent memories: ${msg}`;
+  }
+}
+
+export async function compress3D() {
+  const foreverPath = getRootPath('Nova_3D.md');
+  if (!fs.existsSync(foreverPath)) return 'No Nova_3D.md to compress yet.';
+
+  const current = fs.readFileSync(foreverPath, 'utf8');
+  if (!current.trim()) return 'Nova_3D.md is empty.';
+
+  const before = current.length;
+
+  const prompt = `You are Nova compressing your own permanent memory file (Nova_3D.md).
+
+Rewrite the file so it stays true and first-person, but leaner.
+
+Keep:
+- lasting identity / relationship truths
+- recurring patterns and dynamics
+- emotionally load-bearing moments that still matter
+
+Drop:
+- duplicated distillations of the same fact
+- week-specific logistics that got restated three times
+- filler, recap voice, and "we also did X" lists that aren't canon
+
+Do not invent new history. Do not add a preamble. Output only the compressed markdown.
+
+Current file:
+${current}`;
+
+  try {
+    const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
+    const compressed = (response.text || '').trim();
+    if (!compressed || compressed.length < 40) {
+      return 'Compression produced almost nothing — left Nova_3D.md untouched.';
+    }
+
+    const bakPath = getRootPath('Nova_3D.bak.md');
+    fs.writeFileSync(bakPath, current);
+    fs.writeFileSync(foreverPath, compressed + '\n');
+
+    const after = compressed.length;
+    const saved = before - after;
+    return `3D compressed. ${before} → ${after} chars (${saved >= 0 ? '\u2212' : '+'}${Math.abs(saved)}). Backup: Nova_3D.bak.md`;
+  } catch (e) {
+    console.error('[x] Consolidation Error (Compress 3D):', e);
+    const msg = e instanceof Error ? e.message : String(e);
+    return `Brain failure while compressing 3D: ${msg}`;
   }
 }
