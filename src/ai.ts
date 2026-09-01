@@ -59,6 +59,8 @@ export const DEEPSEEK_MODELS = [
   'deepseek-v4-flash-vision-exp',
 ] as const;
 
+export const DEEPSEEK_VISION_MODEL = 'deepseek-v4-flash-vision-exp';
+
 let currentModel: ModelConfig = { id: 'gemma-4-31b-it', provider: 'gemini' };
 
 const OPENROUTER_SERVER_TOOLS = [
@@ -361,6 +363,17 @@ async function runOpenAIToolLoop(
   return '';
 }
 
+function promptHasImages(p: string | any[]): boolean {
+  if (!Array.isArray(p)) return false;
+  return p.some(
+    (part: any) =>
+      part?.inlineData ||
+      part?.type === 'image_url' ||
+      part?.type === 'input_image' ||
+      part?.image_url
+  );
+}
+
 function buildResponsesInputFromPrompt(p: string | any[]): any[] {
   if (typeof p === 'string') {
     return [{ role: 'user', content: p }];
@@ -567,9 +580,17 @@ export async function generateContentWithFallback(
           ? [...functionTools, DEEPSEEK_WEB_SEARCH_TOOL]
           : functionTools;
 
+        const modelId =
+          isDefaultConversationRequest && promptHasImages(prompt)
+            ? DEEPSEEK_VISION_MODEL
+            : modelConfig.id;
+        if (modelId !== modelConfig.id) {
+          console.log(`[vision] image attached → ${modelId} (kept ${modelConfig.id} as default)`);
+        }
+
         try {
           const text = await runDeepSeekResponsesLoop(client, prompt, deepseekTools, {
-            model: modelConfig.id,
+            model: modelId,
             temperature: 1.2,
             ...deepseekReasoning(modelConfig, isDefaultConversationRequest),
           });
@@ -581,7 +602,7 @@ export async function generateContentWithFallback(
           const messages = buildMessagesFromPrompt(prompt);
           const chatTools = convertToStandardTools(tools);
           const text = await runOpenAIToolLoop(client, messages, {
-            model: modelConfig.id,
+            model: modelId,
             tools: chatTools.length > 0 ? chatTools : undefined,
             ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
           });
