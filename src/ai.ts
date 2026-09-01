@@ -1,5 +1,5 @@
 // @ts-ignore - Bypass ESM/CommonJS restriction since the SDK natively supports both
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 
 // Module-level NanoGPT client (subscription-only) for chat
@@ -150,20 +150,9 @@ function getOpenRouterTools(tools: any[] = []) {
   return finalTools;
 }
 
-function getGeminiTools(
-  modelId: string,
-  tools: any[] | undefined,
-  isDefaultConversationRequest: boolean
-) {
-  const geminiTools = [...(tools || [])];
-  const hasGoogleSearch = geminiTools.some(tool => 'googleSearch' in tool);
-
-  // Always try to enable googleSearch for Gemini models (especially Gemma)
-  if (!hasGoogleSearch && isDefaultConversationRequest) {
-    geminiTools.push({ googleSearch: {} });
-  }
-
-  return geminiTools;
+function getGeminiTools(tools: any[] | undefined) {
+  // Don't auto-attach googleSearch on every Discord turn.
+  return [...(tools || [])];
 }
 
 // ==================== NANOGPT WEB TOOLS (client-side, using your subscription) ====================
@@ -270,9 +259,12 @@ async function performWebFetch(url: string): Promise<string> {
 
 async function executeTool(name: string, args: any = {}): Promise<string> {
   if (name === 'recall_recent_inner_world' || name === 'recall_my_recent_inner_world') {
-    // Dynamic import avoids init cycle (inner_world -> offscreen -> ai)
     const mod = await import('./inner_world.js');
     return mod.getFullRecentInnerWorld();
+  }
+  if (name === 'recall_visual_canon' || name === 'recall_appearance') {
+    const mod = await import('./appearance.js');
+    return mod.getVisualCanon(args.who || args.subject || 'both');
   }
   if (name === 'web_search') {
     return performWebSearch(args.query || args.q || '');
@@ -401,19 +393,12 @@ export async function generateContentWithFallback(
     try {
       if (modelConfig.provider === 'gemini') {
         const g = getGemini();
-        const geminiTools = getGeminiTools(modelConfig.id, tools, isDefaultConversationRequest);
+        const geminiTools = getGeminiTools(tools);
 
         const geminiConfig: any = {
           temperature: 1.2,
           tools: geminiTools.length > 0 ? geminiTools : undefined,
         };
-
-        // Add high thinking level (helps with tool use / search quality)
-        if (isDefaultConversationRequest) {
-          geminiConfig.thinkingConfig = {
-            thinkingLevel: ThinkingLevel.HIGH,
-          };
-        }
 
         const options: any = {
           model: modelConfig.id,

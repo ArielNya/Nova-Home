@@ -33,7 +33,7 @@ export function getVisualCanon(who: string = 'both'): string {
 
 /** True when Alice is asking for an image prompt / visual canon, not ordinary chat. */
 export function wantsVisualCanon(message: string): boolean {
-  return /\b(image prompt|img prompt|draw prompt|art prompt|grok prompt|imagine prompt|midjourney|visual canon|appearance (file|canon)|character sheet|reference sheet|write (me )?(an? )?(image |art |draw )?prompt|gera(r)? (um )?(image |art )?prompt|prompt de (imagem|desenho|grok|imagine)|prompt (pra|para) (imagem|desenho)|canon visual|como (voc[eê]|eu|a nova) (parece|t[aá] vestid)|looks like (me|you|her|nova|alice))\b/i.test(
+  return /\b(image prompt|img prompt|draw prompt|art prompt|grok prompt|imagine prompt|midjourney|visual canon|visual description|appearance (file|canon)|character sheet|reference sheet|write (me )?(an? )?(image |art |draw )?prompt|gera(r)? (um )?(image |art )?prompt|faz (um )?prompt (de |pra |para |pro )?(imagem|desenho|grok|imagine)|prompt de (imagem|desenho|grok|imagine)|prompt (pra|para|pro) (o )?(imagem|desenho|grok|imagine)|canon visual|como (voc[eê]|eu|a nova) (parece|t[aá] vestid)|looks like (me|you|her|nova|alice)|describe (my|your|our|her) (look|appearance|outfit)|descreve (como |minha |sua |a minha |a sua )?(apar[eê]ncia|roupa|look))\b/i.test(
     message
   );
 }
