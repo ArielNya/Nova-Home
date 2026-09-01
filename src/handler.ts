@@ -5,6 +5,8 @@ import {
   getCurrentModel,
   generateImage,
   DEEPSEEK_MODELS,
+  getDeepSeekThink,
+  setDeepSeekThink,
   type Provider,
 } from './ai';
 import { memory } from './memory';
@@ -97,7 +99,7 @@ export async function handleIncomingMessage(message: Message) {
         return;
       }
       await message.channel.send(
-        `I'm currently using **${current.id}** (${current.provider})! 💕\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`\n\n**DeepSeek:**\n${deepseekList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
+        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`\n\n**DeepSeek:**\n${deepseekList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
       );
       return;
     }
@@ -120,7 +122,23 @@ export async function handleIncomingMessage(message: Message) {
     }
 
     const result = switchModel(modelId, provider);
-    await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}`);
+    const thinkNote =
+      provider === 'deepseek'
+        ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)`
+        : '';
+    await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}${thinkNote}`);
+    return;
+  }
+
+  if (message.content.startsWith('!think') || message.content.startsWith('!reasoning')) {
+    const parts = message.content.split(/\s+/).filter(Boolean);
+    if (parts.length < 2) {
+      await message.channel.send(
+        `DeepSeek thinking is **${getDeepSeekThink()}**.\nSet with \`!think off|low|high|max\` (official API only).`
+      );
+      return;
+    }
+    await message.channel.send(setDeepSeekThink(parts[1]));
     return;
   }
 
@@ -280,7 +298,7 @@ ${unresolved}
 
   if (message.content === '!help') {
     await message.channel.send(
-      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model deepseek deepseek-v4-pro\`, \`!model deepseek deepseek-v4-flash\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`. Type \`!model\` for the full list.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
+      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model deepseek deepseek-v4-pro\`, \`!model deepseek deepseek-v4-flash\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`. Type \`!model\` for the full list.\n\`!think off|low|high|max\` - DeepSeek official API thinking (off = no CoT). Alias: \`!reasoning\`.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
     );
     return;
   }

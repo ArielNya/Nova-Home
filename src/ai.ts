@@ -44,10 +44,13 @@ function getDeepSeekClient() {
 }
 
 export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek';
+export type ThinkLevel = 'off' | 'low' | 'high' | 'max';
 
 interface ModelConfig {
   id: string;
   provider: Provider;
+  /** Official DeepSeek only. Conversation uses the !think setting if omitted. */
+  think?: ThinkLevel;
 }
 
 export const DEEPSEEK_MODELS = [
@@ -82,7 +85,44 @@ export function getCurrentModel() {
   return currentModel;
 }
 
+let deepseekThink: ThinkLevel = 'high';
+
+const THINK_ALIASES: Record<string, ThinkLevel> = {
+  off: 'off',
+  none: 'off',
+  disable: 'off',
+  disabled: 'off',
+  low: 'low',
+  high: 'high',
+  max: 'max',
+};
+
+export function getDeepSeekThink(): ThinkLevel {
+  return deepseekThink;
+}
+
+export function setDeepSeekThink(level: string): string {
+  const next = THINK_ALIASES[level.toLowerCase()];
+  if (!next) {
+    return `Thinking must be \`off\`, \`low\`, \`high\`, or \`max\`. Current: **${deepseekThink}**`;
+  }
+  deepseekThink = next;
+  return next === 'off'
+    ? 'DeepSeek thinking **disabled**.'
+    : `DeepSeek reasoning effort set to **${next}**.`;
+}
+
+function deepseekThinkOptions(model: ModelConfig, isConversation: boolean) {
+  const level = model.think ?? (isConversation ? deepseekThink : 'low');
+  if (level === 'off') return { thinking: { type: 'disabled' as const } };
+  return {
+    thinking: { type: 'enabled' as const },
+    reasoning_effort: level,
+  };
+}
+
 export const TASK_MODELS: ModelConfig[] = [
+  { id: 'deepseek-v4-flash', provider: 'deepseek', think: 'low' },
   { id: 'gemma-4-31b-it', provider: 'gemini' },
   { id: 'gemma-4-26b-a4b-it', provider: 'gemini' },
 ];
@@ -432,8 +472,7 @@ export async function generateContentWithFallback(
         const text = await runOpenAIToolLoop(client, messages, {
           model: modelConfig.id,
           tools: deepseekTools.length > 0 ? deepseekTools : undefined,
-          reasoning_effort: isDefaultConversationRequest ? 'high' : 'low',
-          thinking: { type: isDefaultConversationRequest ? 'enabled' : 'disabled' },
+          ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
         });
         return { text };
       }
