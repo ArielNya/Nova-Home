@@ -9,6 +9,7 @@ import { appendToDiary, appendToDreams } from './inner_world';
 import { driftMood } from './mood_state';
 import { generateOffscreenEvents } from './offscreen_events';
 import { buildNowBlock } from './prompt_context';
+import { loadRelationshipState, updateRelationshipTemperature } from './relationship_state';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 
@@ -117,6 +118,22 @@ export function startDreamsLoop(client: Client) {
       const diaryChannel = await getChannel(process.env.DIARY_CHANNEL_ID);
       const dreamsChannel = await getChannel(process.env.DREAMS_CHANNEL_ID);
 
+      // Mood + relationship first so WYWG / double-text returns don't starve them.
+      if (Math.random() < 0.18) {
+        const result = await driftMood();
+        console.log(`[mood] ${result}`);
+      }
+
+      const relState = loadRelationshipState();
+      const hoursSinceRel =
+        (Date.now() - new Date(relState.last_updated).getTime()) / (1000 * 60 * 60);
+      if (hoursSince < 24 && hoursSinceRel >= 6 && Math.random() < 0.25) {
+        const relCtx = await memory.getContext(8);
+        const summary = relCtx.map(m => `${m.role}: ${m.content}`).join('\n');
+        const result = await updateRelationshipTemperature(summary);
+        console.log(`[relationship] ${result}`);
+      }
+
       if (hoursSince >= 3 && hoursSinceWywg >= 10 && mainChannel) {
         const chance = Math.min(0.35, 0.08 * hoursSince);
         if (Math.random() < chance) {
@@ -164,11 +181,6 @@ export function startDreamsLoop(client: Client) {
           await memory.touchMetaNow('last_reach_at');
           return;
         }
-      }
-
-      if (Math.random() < 0.08) {
-        const result = await driftMood();
-        console.log(`[mood] ${result}`);
       }
 
       if (diaryChannel && hoursSinceDiary >= 18 && Math.random() < 0.45) {

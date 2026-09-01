@@ -52,7 +52,7 @@ export async function driftMood(): Promise<string> {
     (Date.now() - new Date(current.last_updated).getTime()) / (1000 * 60 * 60);
 
   // Only drift if it's been a while (prevents spammy updates)
-  if (hoursSinceUpdate < 6) {
+  if (hoursSinceUpdate < 3) {
     return 'Mood is still fresh, no drift needed.';
   }
 

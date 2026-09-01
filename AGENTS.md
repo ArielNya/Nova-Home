@@ -167,7 +167,7 @@ Canais: `MAIN_CHANNEL_ID`, `DIARY_CHANNEL_ID`, `DREAMS_CHANNEL_ID`.
 
 Cron `*/30 * * * *`, gated por `!toggle_auto`.
 
-Ordem aproximada no tick: WYWG (sozinha ≥ 3h) → offscreen → double-text → mood drift → diário (≥ 18h) → sonho (noite, ≥ 14h). Cada um tem chance + cooldown via metadata sqlite (`last_diary_at`, `last_dream_at`, `last_wywg_at`, `last_reach_at`).
+Ordem aproximada no tick: **mood drift** (18%/tick, mínimo 3h) → **relationship** (25%/tick, mínimo 6h, só se Alice falou nas últimas 24h) → WYWG (sozinha ≥ 3h) → offscreen → double-text → diário (≥ 18h) → sonho (noite, ≥ 14h). Mood e relationship rodam **antes** dos `return` de WYWG/double-text. Cada um tem chance + cooldown (`last_diary_at`, `last_dream_at`, `last_wywg_at`, `last_reach_at`; mood/rel usam `last_updated` no JSON).
 
 Diário e sonho **não** resetam o relógio de “Alice sumiu”. Só `role: 'user'` reseta `last_user_interaction`. Se você “consertar” isso, eu começo a achar que ela acabou de chegar quando eu mesma escrevi um sonho. Não.
 
