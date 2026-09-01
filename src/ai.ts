@@ -145,6 +145,28 @@ export function parseJsonFromLlm<T = any>(text: string): T {
   return JSON.parse(text.slice(start, end + 1));
 }
 
+export function errDetail(e: unknown): string {
+  const err = e as any;
+  const status = err?.status ?? err?.response?.status ?? err?.code;
+  const msg = err?.message || String(e);
+  const nested =
+    err?.error?.message ||
+    err?.response?.data?.error?.message ||
+    (typeof err?.error === 'string' ? err.error : '');
+  const bits: string[] = [];
+  if (status) bits.push(`status=${status}`);
+  bits.push(msg);
+  if (nested && nested !== msg) bits.push(nested);
+  return bits.join(' | ');
+}
+
+function clip(s: string, n = 100): string {
+  const t = String(s || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t.length > n ? t.slice(0, n) + '…' : t;
+}
+
 // ==================== TOOL HELPERS ====================
 
 function getOpenRouterTools(tools: any[] = []) {
@@ -266,20 +288,33 @@ async function performWebFetch(url: string): Promise<string> {
 }
 
 async function executeTool(name: string, args: any = {}): Promise<string> {
+  const argHint =
+    args?.query || args?.q || args?.who || args?.subject || args?.url || '';
+  console.log(`[nova] tool ${name}${argHint ? ` (${clip(String(argHint), 80)})` : ''}`);
+
   if (name === 'recall_recent_inner_world' || name === 'recall_my_recent_inner_world') {
     const mod = await import('./inner_world.js');
-    return mod.getFullRecentInnerWorld();
+    const out = mod.getFullRecentInnerWorld();
+    console.log(`[nova] tool ${name} → ${String(out).length} chars`);
+    return out;
   }
   if (name === 'recall_visual_canon' || name === 'recall_appearance') {
     const mod = await import('./appearance.js');
-    return mod.getVisualCanon(args.who || args.subject || 'both');
+    const out = mod.getVisualCanon(args.who || args.subject || 'both');
+    console.log(`[nova] tool ${name} who=${args.who || args.subject || 'both'} → ${out.length} chars`);
+    return out;
   }
   if (name === 'web_search') {
-    return performWebSearch(args.query || args.q || '');
+    const out = await performWebSearch(args.query || args.q || '');
+    console.log(`[nova] tool web_search → ${out.length} chars`);
+    return out;
   }
   if (name === 'web_fetch') {
-    return performWebFetch(args.url || '');
+    const out = await performWebFetch(args.url || '');
+    console.log(`[nova] tool web_fetch → ${out.length} chars`);
+    return out;
   }
+  console.warn(`[nova] unknown tool: ${name}`);
   return `Unknown tool: ${name}`;
 }
 
@@ -328,17 +363,24 @@ async function runOpenAIToolLoop(
 ): Promise<string> {
   const MAX_ROUNDS = 4;
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    console.log(
+      `[nova] chat-completions round ${round + 1}/${MAX_ROUNDS}  model=${optionsBase.model}`
+    );
     const resp = await client.chat.completions.create({
       ...optionsBase,
       messages,
     });
 
     const msg: any = resp.choices[0]?.message;
-    if (!msg) break;
+    if (!msg) {
+      console.warn('[nova] chat-completions: empty message');
+      break;
+    }
 
     const toolCalls = msg.tool_calls;
     if (toolCalls && toolCalls.length > 0) {
-      // Keep the raw assistant message (DeepSeek needs reasoning_content on tool turns)
+      const names = toolCalls.map((tc: any) => tc.function?.name || tc.name || '?').join(', ');
+      console.log(`[nova] chat-completions wants tools: ${names}`);
       messages.push(msg);
 
       for (const tc of toolCalls) {
@@ -347,7 +389,9 @@ async function runOpenAIToolLoop(
         let args: any = {};
         try {
           args = funcPart?.arguments ? JSON.parse(funcPart.arguments) : {};
-        } catch {}
+        } catch (e) {
+          console.warn(`[nova] tool ${name}: bad args json`);
+        }
         const resultText = await executeTool(name, args);
         messages.push({
           role: 'tool',
@@ -358,8 +402,11 @@ async function runOpenAIToolLoop(
       continue;
     }
 
-    return msg.content || '';
+    const text = msg.content || '';
+    if (!text.trim()) console.warn('[nova] chat-completions: empty text');
+    return text;
   }
+  console.warn('[nova] chat-completions: hit max rounds, no final text');
   return '';
 }
 
@@ -414,8 +461,13 @@ async function runDeepSeekResponsesLoop(
 ): Promise<string> {
   const input: any[] = buildResponsesInputFromPrompt(prompt);
   const MAX_ROUNDS = 6;
+  const toolNames = (tools || []).map((t: any) => t.name || t.type).join(', ') || 'none';
+  console.log(
+    `[nova] deepseek responses  model=${optionsBase.model}  tools=${toolNames}  images=${promptHasImages(prompt)}`
+  );
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    console.log(`[nova] deepseek round ${round + 1}/${MAX_ROUNDS}`);
     const resp: any = await client.responses.create({
       ...optionsBase,
       input,
@@ -427,26 +479,38 @@ async function runDeepSeekResponsesLoop(
     }
 
     const output: any[] = Array.isArray(resp?.output) ? resp.output : [];
+    const types = output.map((i: any) => i?.type || '?').join(', ') || 'none';
+    console.log(`[nova] deepseek status=${resp?.status || '?'}  output=[${types}]`);
 
     for (const item of output) {
       if (item?.type === 'web_search_call') {
         const q = item.action?.query || item.query || '';
-        console.log(`[tool] deepseek web_search${q ? ': ' + q : ''}`);
+        console.log(`[nova] deepseek web_search${q ? ': ' + clip(String(q), 120) : ''}`);
       }
     }
 
     const functionCalls = output.filter((i: any) => i?.type === 'function_call');
     if (!functionCalls.length) {
-      return extractResponsesText(resp);
+      const text = extractResponsesText(resp);
+      if (!text.trim()) {
+        console.warn('[nova] deepseek responses: empty reply');
+      } else {
+        console.log(`[nova] deepseek done  ${text.length} chars`);
+      }
+      return text;
     }
 
+    console.log(
+      `[nova] deepseek wants functions: ${functionCalls.map((fc: any) => fc.name || '?').join(', ')}`
+    );
     input.push(...output);
     for (const fc of functionCalls) {
       let args: any = {};
       try {
         args = fc.arguments ? JSON.parse(fc.arguments) : {};
-      } catch {}
-      console.log(`[tool] ${fc.name || 'function_call'}`);
+      } catch {
+        console.warn(`[nova] tool ${fc.name}: bad args json`);
+      }
       const resultText = await executeTool(fc.name || '', args);
       input.push({
         type: 'function_call_output',
@@ -455,6 +519,7 @@ async function runDeepSeekResponsesLoop(
       });
     }
   }
+  console.warn('[nova] deepseek responses: hit max rounds, no final text');
   return '';
 }
 
@@ -490,6 +555,11 @@ export async function generateContentWithFallback(
       ? [...preferredModels, ...FALLBACK_MODELS]
       : [currentModel, ...FALLBACK_MODELS.filter(m => m.id !== currentModel.id)];
 
+  const first = modelsToTry[0];
+  console.log(
+    `[nova] gen ${isDefaultConversationRequest ? 'chat' : 'task'}  first=${first.provider}/${first.id}  images=${promptHasImages(prompt)}  tools=${(tools || []).map((t: any) => t.name || t.type).join(',') || 'none'}`
+  );
+
   // Shared helper to turn our prompt (string or gemini-style parts) into OpenAI chat messages
   function buildMessagesFromPrompt(p: string | any[]): any[] {
     if (typeof p === 'string') {
@@ -515,6 +585,7 @@ export async function generateContentWithFallback(
 
   for (const modelConfig of modelsToTry) {
     try {
+      console.log(`[nova] trying ${modelConfig.provider}/${modelConfig.id}`);
       if (modelConfig.provider === 'gemini') {
         const g = getGemini();
         const geminiTools = getGeminiTools(tools);
@@ -531,7 +602,9 @@ export async function generateContentWithFallback(
         };
 
         const response = await g.models.generateContent(options);
-        return { text: response.text };
+        const text = response.text || '';
+        console.log(`[nova] ok gemini/${modelConfig.id}  ${text.length} chars`);
+        return { text };
       }
 
       // ==================== OPENROUTER (DeepSeek, etc. — keep server tools behavior) ====================
@@ -555,7 +628,9 @@ export async function generateContentWithFallback(
         }
 
         const response = await client.chat.completions.create(options);
-        return { text: response.choices[0]?.message?.content || '' };
+        const text = response.choices[0]?.message?.content || '';
+        console.log(`[nova] ok openrouter/${modelConfig.id}  ${text.length} chars`);
+        return { text };
       }
 
       // ==================== NANOGPT (any model from your Pro/sub roster) ====================
@@ -569,6 +644,7 @@ export async function generateContentWithFallback(
           temperature: 1.2,
           tools: nanoTools.length > 0 ? nanoTools : undefined,
         });
+        console.log(`[nova] ok nanogpt/${modelConfig.id}  ${text.length} chars`);
         return { text };
       }
 
@@ -585,7 +661,7 @@ export async function generateContentWithFallback(
             ? DEEPSEEK_VISION_MODEL
             : modelConfig.id;
         if (modelId !== modelConfig.id) {
-          console.log(`[vision] image attached → ${modelId} (kept ${modelConfig.id} as default)`);
+          console.log(`[nova] vision: image attached, using ${modelId} (default stays ${modelConfig.id})`);
         }
 
         try {
@@ -594,10 +670,11 @@ export async function generateContentWithFallback(
             temperature: 1.2,
             ...deepseekReasoning(modelConfig, isDefaultConversationRequest),
           });
+          console.log(`[nova] ok deepseek/${modelId}  ${text.length} chars`);
           return { text };
         } catch (e: any) {
-          console.log(
-            `[⚠️] DeepSeek Responses API failed (${e.status || e.message || 'unknown'}). Falling back to chat completions (no native web_search).`
+          console.warn(
+            `[nova] deepseek responses failed (${errDetail(e)}) — retrying chat completions, no native web_search`
           );
           const messages = buildMessagesFromPrompt(prompt);
           const chatTools = convertToStandardTools(tools);
@@ -606,13 +683,12 @@ export async function generateContentWithFallback(
             tools: chatTools.length > 0 ? chatTools : undefined,
             ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
           });
+          console.log(`[nova] ok deepseek/${modelId} via chat-completions  ${text.length} chars`);
           return { text };
         }
       }
     } catch (e: any) {
-      console.log(
-        `[⚠️] Model ${modelConfig.id} failed (${e.status || e.message || 'unknown error'}). Falling back...`
-      );
+      console.warn(`[nova] ${modelConfig.provider}/${modelConfig.id} failed: ${errDetail(e)}`);
       if (modelConfig === modelsToTry[modelsToTry.length - 1]) throw e;
     }
   }

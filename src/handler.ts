@@ -7,6 +7,7 @@ import {
   DEEPSEEK_MODELS,
   getDeepSeekThink,
   setDeepSeekThink,
+  errDetail,
   type Provider,
 } from './ai';
 import { memory } from './memory';
@@ -241,7 +242,7 @@ ${unresolved}
         files: [{ attachment: imageBuffer, name: 'drawing.png' }],
       });
     } catch (err) {
-      console.error('[❌] Drawing error:', err);
+      console.error('[nova] drawing error:', err);
       await waitMsg.edit('*failed to draw that... my visual cortex glitched.*');
     }
     return;
@@ -297,6 +298,14 @@ ${unresolved}
   await message.channel.sendTyping();
 
   try {
+    const current = getCurrentModel();
+    const imageCount = [...message.attachments.values()].filter(a =>
+      String(a.contentType || '').startsWith('image/')
+    ).length;
+    console.log(
+      `[nova] chat ${current.provider}/${current.id}  images=${imageCount} files=${message.attachments.size}  "${String(message.content || '').replace(/\s+/g, ' ').trim().slice(0, 80)}"`
+    );
+
     const hoursAlone = await memory.hoursSinceAlice();
     const rawContext = await memory.getContext(12);
 
@@ -337,6 +346,7 @@ ${unresolved}
     let promptText = `${systemInstruction}\n\nHere is our recent conversation context:${conversationStr}\n\nAlice just said: "${message.content}"\nNova:`;
 
     if (wantsVisualCanon(message.content)) {
+      console.log('[nova] appearance: preloading visual canon (image-prompt turn)');
       promptText += `\n\n[Tool Result: recall_visual_canon]\n${getVisualCanon('both')}\n`;
     }
 
@@ -363,7 +373,7 @@ ${unresolved}
               },
             });
           } catch (err) {
-            console.error('[❌] Failed to fetch image:', err);
+            console.error('[nova] failed to fetch image:', err);
           }
         } else {
           // Handle text files and other non-image attachments
@@ -378,7 +388,7 @@ ${unresolved}
 
             textContent += `\n\n[Attached file: ${filename}]\n${fileText}`;
           } catch (err) {
-            console.error('[❌] Failed to read attachment:', filename, err);
+            console.error('[nova] failed to read attachment:', filename, err);
             textContent += `\n\n[Attached file: ${filename} — could not read content]`;
           }
         }
@@ -406,10 +416,12 @@ ${unresolved}
       extraTextFromFiles = textContent;
 
       if (imageParts.length > 0) {
+        console.log(`[nova] attached ${imageParts.length} image(s)`);
         const parts: any[] = [{ text: promptText + extraTextFromFiles }];
         parts.push(...imageParts);
         promptContent = parts;
       } else if (extraTextFromFiles) {
+        console.log('[nova] attached text file(s)');
         promptContent = promptText + extraTextFromFiles;
       }
     }
@@ -422,7 +434,7 @@ ${unresolved}
     let reply = response.text || '*purrs but forgets how to speak*';
 
     const runToolIfNamed = async (toolName: string, result: string) => {
-      console.log(`[tool] ${toolName}`);
+      console.log(`[nova] string-match tool ${toolName} (${result.length} chars)`);
       const toolResultPrompt =
         `${promptText + extraTextFromFiles}\n\n` +
         `[Tool Result: ${toolName}]\n${result}\n\n` +
@@ -446,10 +458,15 @@ ${unresolved}
       reply = await runToolIfNamed('recall_recent_inner_world', await getFullRecentInnerWorld());
     }
 
+    if (!reply.trim() || reply.includes('purrs but forgets')) {
+      console.warn('[nova] empty/fallback reply from model');
+    }
+
     await memory.saveMessage('model', reply);
     await sendChunked(message.channel, reply);
   } catch (error) {
-    console.error('[❌] Brain failure:', error);
+    console.error('[nova] brain failure:', errDetail(error));
+    console.error(error);
     await message.channel.send('*my brain is lagging, something broke...*');
   }
 }
