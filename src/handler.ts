@@ -101,7 +101,7 @@ export async function handleIncomingMessage(message: Message) {
         return;
       }
       await message.channel.send(
-        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : current.provider === 'grok' ? `\nEffort: **${getGrokEffort()}** (\`!effort low|medium|high|xhigh\`)\nAuth: **${grokAuthSource()}**` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`, \`grok\`\n\nCatalog: \`!models\` · \`!models deepseek\` · \`!models grok\`\n\n**DeepSeek:**\n${deepseekList}\n\n**Grok:**\n${grokList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
+        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : current.provider === 'grok' ? `\nEffort: **${getGrokEffort()}** (\`!effort low|medium|high|xhigh\`)\nAuth: **${grokAuthSource()}**` : current.provider === 'gemini' ? `\nThinking: **${getDeepSeekThink()}** (\`!think\` — Gemma 4 on/off; Gemini 3 thinkingLevel; Gemini 2.5 thinkingBudget)` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`, \`grok\`\n\nCatalog: \`!models\` · \`!models deepseek\` · \`!models grok\`\n\n**DeepSeek:**\n${deepseekList}\n\n**Grok:**\n${grokList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
       );
       return;
     }
@@ -134,6 +134,8 @@ export async function handleIncomingMessage(message: Message) {
     let extra = '';
     if (provider === 'deepseek') {
       extra = `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)`;
+    } else if (provider === 'gemini') {
+      extra = `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\` — Gemma 4 is on/off only)`;
     } else if (provider === 'grok') {
       const src = grokAuthSource();
       extra = `\nEffort: **${getGrokEffort()}** (\`!effort low|medium|high|xhigh\`)\nAuth: **${src}**`;

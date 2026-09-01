@@ -103,6 +103,8 @@ Id da chain vive em `grok-session.json` (gitignored). DeepSeek continua stateles
 
 Providers em `ai.ts`: `gemini` | `openrouter` | `nanogpt` | `deepseek` | `grok`. Conversa = modelo atual + `FALLBACK_MODELS`. Task = `TASK_MODELS` (deepseek-v4-flash think low → gemmas). Grok **não** entra em fallback/task — se falhar, cai nos geminis.
 
+Google thinking (`generateContent.thinkingConfig`, **não** Responses): Gemma 4 = `thinkingLevel` high|minimal. Gemini 3+ = `thinkingLevel`. Gemini 2.5 = `thinkingBudget`. Gemini 1.5 = sem knob. `!think` reusa o mesmo nível do DeepSeek.
+
 Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`. `cached` alto nas msgs seguintes = prefixo batendo. Não vira novel de debug.
 
 ---
@@ -113,7 +115,7 @@ Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`
 !model [provider] [id]     troca o cérebro de conversa
 !models [deepseek|grok]    catálogo live das APIs (handles)
 !grok login|status|logout  SuperGrok / X Premium OAuth (device code)
-!think off|low|high|max    thinking do DeepSeek oficial
+!think off|low|high|max    thinking DeepSeek + Gemini/Gemma (Gemma 4 = on/off)
 !effort low|medium|high|xhigh  reasoning do Grok 4.5/4.6 (default high; xhigh só 4.6)
 !draw <prompt>             Grok Imagine (`grok-imagine-image-2.0`)
 !draw nano <prompt>        NanoGPT

@@ -200,6 +200,47 @@ function grokReasoning(_model: ModelConfig, isConversation: boolean) {
   return { reasoning: { effort } };
 }
 
+/**
+ * Gemini API thinkingConfig.
+ * Gemma 4: high | minimal (on/off only).
+ * Gemini 3+: thinkingLevel minimal|low|medium|high.
+ * Gemini 2.5: thinkingBudget tokens.
+ * Gemini 1.5: no thinking knob — omit.
+ */
+function geminiThinkingConfig(model: ModelConfig, isConversation: boolean): { thinkingConfig: Record<string, unknown> } | undefined {
+  const id = (model.id || '').toLowerCase();
+  const level = model.think ?? (isConversation ? deepseekThink : 'low');
+
+  if (id.includes('gemma-4') || /^gemma-4/.test(id)) {
+    const thinkingLevel = level === 'off' || level === 'low' ? 'minimal' : 'high';
+    console.log(`[nova] gemini think  ${model.id}  thinkingLevel=${thinkingLevel}  (gemma on/off)`);
+    return { thinkingConfig: { thinkingLevel } };
+  }
+
+  if (id.includes('gemini-1.5') || id.includes('gemini-1.0')) {
+    return undefined;
+  }
+
+  if (id.includes('gemini-2.5')) {
+    const thinkingBudget =
+      level === 'off' ? 0 : level === 'low' ? 1024 : level === 'max' ? 24576 : 8192;
+    console.log(`[nova] gemini think  ${model.id}  thinkingBudget=${thinkingBudget}`);
+    return { thinkingConfig: { thinkingBudget } };
+  }
+
+  if (id.includes('gemini-')) {
+    const isPro = id.includes('pro') && !id.includes('flash');
+    let thinkingLevel = 'high';
+    if (level === 'off') thinkingLevel = isPro ? 'low' : 'minimal';
+    else if (level === 'low') thinkingLevel = 'low';
+    else if (level === 'max' || level === 'high') thinkingLevel = 'high';
+    console.log(`[nova] gemini think  ${model.id}  thinkingLevel=${thinkingLevel}`);
+    return { thinkingConfig: { thinkingLevel } };
+  }
+
+  return undefined;
+}
+
 type GrokChain = {
   responseId: string;
   modelId: string;
@@ -890,6 +931,7 @@ export async function generateContentWithFallback(
         const geminiConfig: any = {
           temperature: 1.2,
           tools: geminiTools.length > 0 ? geminiTools : undefined,
+          ...geminiThinkingConfig(modelConfig, isDefaultConversationRequest),
         };
 
         const options: any = {
