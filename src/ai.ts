@@ -191,12 +191,28 @@ function deepseekReasoning(model: ModelConfig, isConversation: boolean) {
   return { reasoning: { effort: level === 'off' ? 'none' : level } };
 }
 
-/** xAI grok-4.6/4.5: low | medium | high | xhigh. Cannot disable. Default high. */
-function grokReasoning(_model: ModelConfig, isConversation: boolean) {
-  if (!isConversation) return { reasoning: { effort: 'low' as GrokEffort } };
+/** xAI: only 4.5 / 4.6 / 4.20-reasoning / multi-agent take reasoning.effort. */
+function grokSupportsReasoningEffort(id: string): boolean {
+  const s = (id || '').toLowerCase();
+  if (!s) return false;
+  if (s.includes('non-reasoning')) return false;
+  if (s.includes('4.6') || s.includes('4-6')) return true;
+  if (s.includes('4.5') || s.includes('4-5')) return true;
+  if (s.includes('multi-agent')) return true;
+  if (s.includes('4.20') || s.includes('4-20')) return true;
+  return false;
+}
+
+/** xAI grok-4.6/4.5: low | medium | high | xhigh. Cannot disable. Default high. Omitted on models that 400. */
+function grokReasoning(_model: ModelConfig, isConversation: boolean): { reasoning?: { effort: GrokEffort } } {
+  if (!grokSupportsReasoningEffort(_model.id)) {
+    console.log(`[nova] grok think  ${_model.id}  skipped (no reasoningEffort)`);
+    return {};
+  }
   const id = (_model.id || '').toLowerCase();
-  let effort: GrokEffort = grokEffort;
-  if (effort === 'xhigh' && !id.includes('4.6')) effort = 'high';
+  let effort: GrokEffort = isConversation ? grokEffort : 'low';
+  if (effort === 'xhigh' && !id.includes('4.6') && !id.includes('4-6')) effort = 'high';
+  console.log(`[nova] grok think  ${_model.id}  effort=${effort}`);
   return { reasoning: { effort } };
 }
 
@@ -1121,12 +1137,13 @@ export async function generateContentWithFallback(
           saveGrokChain(null);
           const messages = toChatMessages(prompt);
           const chatTools = convertToStandardTools(tools);
-          const grokEffort = grokReasoning(modelConfig, isDefaultConversationRequest).reasoning.effort;
-          const text = await runOpenAIToolLoop(client, messages, {
+          const grokReason = grokReasoning(modelConfig, isDefaultConversationRequest);
+          const chatOpts: any = {
             model: modelConfig.id,
             tools: chatTools.length > 0 ? chatTools : undefined,
-            reasoning_effort: grokEffort,
-          });
+          };
+          if (grokReason.reasoning) chatOpts.reasoning_effort = grokReason.reasoning.effort;
+          const text = await runOpenAIToolLoop(client, messages, chatOpts);
           console.log(`[nova] ok grok/${modelConfig.id} via chat-completions  ${text.length} chars`);
           return { text };
         }
