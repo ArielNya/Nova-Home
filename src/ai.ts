@@ -121,6 +121,12 @@ function deepseekThinkOptions(model: ModelConfig, isConversation: boolean) {
   };
 }
 
+/** Responses API reasoning.effort: none | low | high | max */
+function deepseekReasoning(model: ModelConfig, isConversation: boolean) {
+  const level = model.think ?? (isConversation ? deepseekThink : 'low');
+  return { reasoning: { effort: level === 'off' ? 'none' : level } };
+}
+
 export const TASK_MODELS: ModelConfig[] = [
   { id: 'deepseek-v4-flash', provider: 'deepseek', think: 'low' },
   { id: 'gemma-4-31b-it', provider: 'gemini' },
@@ -292,6 +298,27 @@ function convertToStandardTools(tools: any[] = []): any[] {
   });
 }
 
+/** Flatten Gemini-style {name, description, parameters} into Responses API function tools. */
+function convertToResponsesFunctionTools(tools: any[] = []): any[] {
+  return tools
+    .map(t => {
+      if (t?.type === 'web_search' || t?.type === 'web_search_2025_08_26') {
+        return { type: t.type };
+      }
+      const name = t?.function?.name || t?.name;
+      if (!name) return null;
+      return {
+        type: 'function',
+        name,
+        description: t?.function?.description || t?.description || '',
+        parameters: t?.function?.parameters || t?.parameters || { type: 'object', properties: {} },
+      };
+    })
+    .filter(Boolean);
+}
+
+const DEEPSEEK_WEB_SEARCH_TOOL = { type: 'web_search' as const };
+
 async function runOpenAIToolLoop(
   client: OpenAI,
   messages: any[],
@@ -330,6 +357,90 @@ async function runOpenAIToolLoop(
     }
 
     return msg.content || '';
+  }
+  return '';
+}
+
+function buildResponsesInputFromPrompt(p: string | any[]): any[] {
+  if (typeof p === 'string') {
+    return [{ role: 'user', content: p }];
+  }
+  if (Array.isArray(p)) {
+    const content = p.map(part => {
+      if (part.text) return { type: 'input_text', text: part.text };
+      if (part.inlineData) {
+        return {
+          type: 'input_image',
+          image_url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+        };
+      }
+      return { type: 'input_text', text: JSON.stringify(part) };
+    });
+    return [{ role: 'user', content }];
+  }
+  return [{ role: 'user', content: '' }];
+}
+
+function extractResponsesText(resp: any): string {
+  if (resp?.output_text) return String(resp.output_text);
+  const parts: string[] = [];
+  for (const item of resp?.output || []) {
+    if (item?.type !== 'message') continue;
+    for (const c of item.content || []) {
+      if (typeof c?.text === 'string') parts.push(c.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+async function runDeepSeekResponsesLoop(
+  client: OpenAI,
+  prompt: string | any[],
+  tools: any[],
+  optionsBase: any
+): Promise<string> {
+  const input: any[] = buildResponsesInputFromPrompt(prompt);
+  const MAX_ROUNDS = 6;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const resp: any = await client.responses.create({
+      ...optionsBase,
+      input,
+      tools: tools.length ? tools : undefined,
+    });
+
+    if (resp?.status === 'failed' || resp?.error) {
+      throw new Error(resp?.error?.message || 'DeepSeek Responses status=failed');
+    }
+
+    const output: any[] = Array.isArray(resp?.output) ? resp.output : [];
+
+    for (const item of output) {
+      if (item?.type === 'web_search_call') {
+        const q = item.action?.query || item.query || '';
+        console.log(`[tool] deepseek web_search${q ? ': ' + q : ''}`);
+      }
+    }
+
+    const functionCalls = output.filter((i: any) => i?.type === 'function_call');
+    if (!functionCalls.length) {
+      return extractResponsesText(resp);
+    }
+
+    input.push(...output);
+    for (const fc of functionCalls) {
+      let args: any = {};
+      try {
+        args = fc.arguments ? JSON.parse(fc.arguments) : {};
+      } catch {}
+      console.log(`[tool] ${fc.name || 'function_call'}`);
+      const resultText = await executeTool(fc.name || '', args);
+      input.push({
+        type: 'function_call_output',
+        call_id: fc.call_id,
+        output: String(resultText),
+      });
+    }
   }
   return '';
 }
@@ -448,18 +559,34 @@ export async function generateContentWithFallback(
         return { text };
       }
 
-      // ==================== DEEPSEEK (official API) ====================
+      // ==================== DEEPSEEK (official API — Responses + native web_search) ====================
       else if (modelConfig.provider === 'deepseek') {
         const client = getDeepSeekClient();
-        const messages = buildMessagesFromPrompt(prompt);
-        const deepseekTools = convertToStandardTools(tools);
+        const functionTools = convertToResponsesFunctionTools(tools);
+        const deepseekTools = isDefaultConversationRequest
+          ? [...functionTools, DEEPSEEK_WEB_SEARCH_TOOL]
+          : functionTools;
 
-        const text = await runOpenAIToolLoop(client, messages, {
-          model: modelConfig.id,
-          tools: deepseekTools.length > 0 ? deepseekTools : undefined,
-          ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
-        });
-        return { text };
+        try {
+          const text = await runDeepSeekResponsesLoop(client, prompt, deepseekTools, {
+            model: modelConfig.id,
+            temperature: 1.2,
+            ...deepseekReasoning(modelConfig, isDefaultConversationRequest),
+          });
+          return { text };
+        } catch (e: any) {
+          console.log(
+            `[⚠️] DeepSeek Responses API failed (${e.status || e.message || 'unknown'}). Falling back to chat completions (no native web_search).`
+          );
+          const messages = buildMessagesFromPrompt(prompt);
+          const chatTools = convertToStandardTools(tools);
+          const text = await runOpenAIToolLoop(client, messages, {
+            model: modelConfig.id,
+            tools: chatTools.length > 0 ? chatTools : undefined,
+            ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
+          });
+          return { text };
+        }
       }
     } catch (e: any) {
       console.log(

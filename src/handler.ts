@@ -321,6 +321,12 @@ ${unresolved}
 - recall_visual_canon(who: alice|nova|both): load appearance canon. Use ONLY when Alice asks for an image prompt, drawing prompt, visual description, or canon look. Do not use for ordinary chat.
 - recall_recent_inner_world: load recent diary/dreams/offscreen. Use only when you need more inner-world detail than [NOW].\n`;
 
+    const provider = getCurrentModel().provider;
+    if (provider === 'deepseek' || provider === 'nanogpt' || provider === 'openrouter') {
+      systemInstruction +=
+        '- web_search: look up current facts, news, dates, or anything you do not already know. Use when needed, not for ordinary chat.\n';
+    }
+
     systemInstruction += `\n\n${buildNowBlock(hoursAlone)}\n`;
 
     let conversationStr = '\n';
