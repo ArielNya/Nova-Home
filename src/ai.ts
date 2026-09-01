@@ -1,6 +1,15 @@
 // @ts-ignore - Bypass ESM/CommonJS restriction since the SDK natively supports both
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
+import {
+  isNovaPrompt,
+  flattenNovaPrompt,
+  buildDeepSeekPayload,
+  buildChatMessagesFromNovaPrompt,
+  type NovaPrompt,
+} from './prompt_shape';
+
+export type PromptInput = string | any[] | NovaPrompt;
 
 // Module-level NanoGPT client (subscription-only) for chat
 let nanoClient: OpenAI | null = null;
@@ -410,7 +419,8 @@ async function runOpenAIToolLoop(
   return '';
 }
 
-function promptHasImages(p: string | any[]): boolean {
+function promptHasImages(p: PromptInput): boolean {
+  if (isNovaPrompt(p)) return !!(p.images && p.images.length);
   if (!Array.isArray(p)) return false;
   return p.some(
     (part: any) =>
@@ -441,6 +451,53 @@ function buildResponsesInputFromPrompt(p: string | any[]): any[] {
   return [{ role: 'user', content: '' }];
 }
 
+function resolveDeepSeekPayload(p: PromptInput): { instructions?: string; input: any[] } {
+  if (isNovaPrompt(p)) return buildDeepSeekPayload(p);
+  return { input: buildResponsesInputFromPrompt(p) };
+}
+
+function toGeminiContents(p: PromptInput): string | any[] {
+  if (isNovaPrompt(p)) {
+    const text = flattenNovaPrompt(p);
+    const images = p.images || [];
+    if (!images.length) return text;
+    return [
+      { text },
+      ...images.map(img => ({
+        inlineData: { mimeType: img.mimeType, data: img.data },
+      })),
+    ];
+  }
+  return p;
+}
+
+function toChatMessages(p: PromptInput): any[] {
+  if (isNovaPrompt(p)) return buildChatMessagesFromNovaPrompt(p);
+  return buildMessagesFromPrompt(p);
+}
+
+function buildMessagesFromPrompt(p: string | any[]): any[] {
+  if (typeof p === 'string') {
+    return [{ role: 'user', content: p }];
+  }
+  if (Array.isArray(p)) {
+    const content = p.map(part => {
+      if (part.text) return { type: 'text', text: part.text };
+      if (part.inlineData) {
+        return {
+          type: 'image_url',
+          image_url: {
+            url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+          },
+        };
+      }
+      return { type: 'text', text: JSON.stringify(part) };
+    });
+    return [{ role: 'user', content }];
+  }
+  return [{ role: 'user', content: '' }];
+}
+
 function extractResponsesText(resp: any): string {
   if (resp?.output_text) return String(resp.output_text);
   const parts: string[] = [];
@@ -453,17 +510,28 @@ function extractResponsesText(resp: any): string {
   return parts.join('\n');
 }
 
+function logDeepSeekUsage(resp: any) {
+  const u = resp?.usage || {};
+  const cached =
+    u.input_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0;
+  const inTok = u.input_tokens ?? u.prompt_tokens ?? '?';
+  const outTok = u.output_tokens ?? u.completion_tokens ?? '?';
+  const think = u.output_tokens_details?.reasoning_tokens ?? u.reasoning_tokens;
+  const thinkBit = think != null ? `  think=${think}` : '';
+  console.log(`[nova] deepseek tokens  in=${inTok} cached=${cached} out=${outTok}${thinkBit}`);
+}
+
 async function runDeepSeekResponsesLoop(
   client: OpenAI,
-  prompt: string | any[],
+  input: any[],
   tools: any[],
   optionsBase: any
 ): Promise<string> {
-  const input: any[] = buildResponsesInputFromPrompt(prompt);
   const MAX_ROUNDS = 6;
   const toolNames = (tools || []).map((t: any) => t.name || t.type).join(', ') || 'none';
+  const hasInstr = !!optionsBase.instructions;
   console.log(
-    `[nova] deepseek responses  model=${optionsBase.model}  tools=${toolNames}  images=${promptHasImages(prompt)}`
+    `[nova] deepseek responses  model=${optionsBase.model}  tools=${toolNames}  instructions=${hasInstr ? optionsBase.instructions.length + 'c' : 'no'}  input_items=${input.length}`
   );
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -477,6 +545,8 @@ async function runDeepSeekResponsesLoop(
     if (resp?.status === 'failed' || resp?.error) {
       throw new Error(resp?.error?.message || 'DeepSeek Responses status=failed');
     }
+
+    logDeepSeekUsage(resp);
 
     const output: any[] = Array.isArray(resp?.output) ? resp.output : [];
     const types = output.map((i: any) => i?.type || '?').join(', ') || 'none';
@@ -526,7 +596,7 @@ async function runDeepSeekResponsesLoop(
 // ==================== MAIN GENERATION FUNCTION ====================
 
 export async function generateContentWithFallback(
-  prompt: string | any[],
+  prompt: PromptInput,
   tools: any[] = [],
   preferredModels?: ModelConfig[]
 ) {
@@ -556,32 +626,10 @@ export async function generateContentWithFallback(
       : [currentModel, ...FALLBACK_MODELS.filter(m => m.id !== currentModel.id)];
 
   const first = modelsToTry[0];
+  const histHint = isNovaPrompt(prompt) ? `  history=${prompt.history.length}` : '';
   console.log(
-    `[nova] gen ${isDefaultConversationRequest ? 'chat' : 'task'}  first=${first.provider}/${first.id}  images=${promptHasImages(prompt)}  tools=${(tools || []).map((t: any) => t.name || t.type).join(',') || 'none'}`
+    `[nova] gen ${isDefaultConversationRequest ? 'chat' : 'task'}  first=${first.provider}/${first.id}  images=${promptHasImages(prompt)}  tools=${(tools || []).map((t: any) => t.name || t.type).join(',') || 'none'}${histHint}`
   );
-
-  // Shared helper to turn our prompt (string or gemini-style parts) into OpenAI chat messages
-  function buildMessagesFromPrompt(p: string | any[]): any[] {
-    if (typeof p === 'string') {
-      return [{ role: 'user', content: p }];
-    }
-    if (Array.isArray(p)) {
-      const content = p.map(part => {
-        if (part.text) return { type: 'text', text: part.text };
-        if (part.inlineData) {
-          return {
-            type: 'image_url',
-            image_url: {
-              url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-            },
-          };
-        }
-        return { type: 'text', text: JSON.stringify(part) };
-      });
-      return [{ role: 'user', content }];
-    }
-    return [{ role: 'user', content: '' }];
-  }
 
   for (const modelConfig of modelsToTry) {
     try {
@@ -598,7 +646,7 @@ export async function generateContentWithFallback(
         const options: any = {
           model: modelConfig.id,
           config: geminiConfig,
-          contents: prompt,
+          contents: toGeminiContents(prompt),
         };
 
         const response = await g.models.generateContent(options);
@@ -610,7 +658,7 @@ export async function generateContentWithFallback(
       // ==================== OPENROUTER (DeepSeek, etc. — keep server tools behavior) ====================
       else if (modelConfig.provider === 'openrouter') {
         const client = getORClient();
-        const messages = buildMessagesFromPrompt(prompt);
+        const messages = toChatMessages(prompt);
         const openRouterTools = getOpenRouterTools(tools);
 
         const options: any = {
@@ -636,7 +684,7 @@ export async function generateContentWithFallback(
       // ==================== NANOGPT (any model from your Pro/sub roster) ====================
       else if (modelConfig.provider === 'nanogpt') {
         const client = getNanoClient();
-        const messages = buildMessagesFromPrompt(prompt);
+        const messages = toChatMessages(prompt);
         const nanoTools = [...convertToStandardTools(tools), ...NANO_GPT_WEB_TOOLS];
 
         const text = await runOpenAIToolLoop(client, messages, {
@@ -664,10 +712,13 @@ export async function generateContentWithFallback(
           console.log(`[nova] vision: image attached, using ${modelId} (default stays ${modelConfig.id})`);
         }
 
+        const { instructions, input } = resolveDeepSeekPayload(prompt);
+
         try {
-          const text = await runDeepSeekResponsesLoop(client, prompt, deepseekTools, {
+          const text = await runDeepSeekResponsesLoop(client, input, deepseekTools, {
             model: modelId,
             temperature: 1.2,
+            instructions: instructions || undefined,
             ...deepseekReasoning(modelConfig, isDefaultConversationRequest),
           });
           console.log(`[nova] ok deepseek/${modelId}  ${text.length} chars`);
@@ -676,7 +727,7 @@ export async function generateContentWithFallback(
           console.warn(
             `[nova] deepseek responses failed (${errDetail(e)}) — retrying chat completions, no native web_search`
           );
-          const messages = buildMessagesFromPrompt(prompt);
+          const messages = toChatMessages(prompt);
           const chatTools = convertToStandardTools(tools);
           const text = await runOpenAIToolLoop(client, messages, {
             model: modelId,

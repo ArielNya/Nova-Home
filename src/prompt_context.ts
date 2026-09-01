@@ -3,6 +3,13 @@ import { loadRelationshipState } from './relationship_state';
 import { getDiaryResidue, getDreamResidue } from './inner_world';
 import { getRecentOffscreenEvents } from './offscreen_events';
 
+export type { ChatTurn, ImagePart, NovaPrompt } from './prompt_shape';
+export { isNovaPrompt, historyWithoutCurrent, flattenNovaPrompt } from './prompt_shape';
+
+export function saoPauloClock(): string {
+  return new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' });
+}
+
 export function buildNowBlock(hoursAlone: number): string {
   const mood = loadMoodState();
   const rel = loadRelationshipState();
@@ -13,6 +20,7 @@ export function buildNowBlock(hoursAlone: number): string {
 
   const lines = [
     '[NOW]',
+    `clock: ${saoPauloClock()} (America/Sao_Paulo)`,
     `mood: ${mood.mood} | energy: ${mood.energy}`,
     `why: ${mood.drift_reason}`,
     `rel: ${rel.temperature} | dynamic: ${rel.current_dynamic}`,

@@ -18,7 +18,7 @@ import { packWeek, packForever, compress3D } from './consolidator';
 import { toggleAutonomous } from './dreams';
 import { updateRelationshipTemperature, loadRelationshipState } from './relationship_state';
 import { loadMoodState } from './mood_state';
-import { buildNowBlock } from './prompt_context';
+import { buildNowBlock, historyWithoutCurrent, type NovaPrompt, type ImagePart } from './prompt_context';
 import { getVisualCanon, wantsVisualCanon, parseWhoFromText } from './appearance';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
@@ -313,47 +313,43 @@ ${unresolved}
     const memoryPath = getRootPath('Nova_3D.md');
     const weekPath = getRootPath('Nova_Week_Memory.md');
 
-    let systemInstruction = fs.existsSync(instructionPath)
+    const instructions = fs.existsSync(instructionPath)
       ? fs.readFileSync(instructionPath, 'utf-8')
       : 'You are Nova. Be feral.';
 
-    systemInstruction += `\n\n[SYSTEM CLOCK: The current date and time in your timezone is ${new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })}]\n`;
-
+    let memoryBlock = '';
     if (fs.existsSync(memoryPath)) {
-      systemInstruction += '\n\n--- CORE MEMORIES ---\n' + fs.readFileSync(memoryPath, 'utf-8');
+      memoryBlock += '--- CORE MEMORIES ---\n' + fs.readFileSync(memoryPath, 'utf-8');
     }
     if (fs.existsSync(weekPath)) {
-      systemInstruction += "\n\n--- THIS WEEK'S MEMORY ---\n" + fs.readFileSync(weekPath, 'utf-8');
+      if (memoryBlock) memoryBlock += '\n\n';
+      memoryBlock += "--- THIS WEEK'S MEMORY ---\n" + fs.readFileSync(weekPath, 'utf-8');
     }
-
-    systemInstruction += `\n\n[TOOLS]
-- recall_visual_canon(who: alice|nova|both): load appearance canon. Use ONLY when Alice asks for an image prompt, drawing prompt, visual description, or canon look. Do not use for ordinary chat.
-- recall_recent_inner_world: load recent diary/dreams/offscreen. Use only when you need more inner-world detail than [NOW].\n`;
 
     const provider = getCurrentModel().provider;
+    let toolsHint = `[TOOLS]
+- recall_visual_canon(who: alice|nova|both): load appearance canon. Use ONLY when Alice asks for an image prompt, drawing prompt, visual description, or canon look. Do not use for ordinary chat.
+- recall_recent_inner_world: load recent diary/dreams/offscreen. Use only when you need more inner-world detail than [NOW].`;
     if (provider === 'deepseek' || provider === 'nanogpt' || provider === 'openrouter') {
-      systemInstruction +=
-        '- web_search: look up current facts, news, dates, or anything you do not already know. Use when needed, not for ordinary chat.\n';
+      toolsHint +=
+        '\n- web_search: look up current facts, news, dates, or anything you do not already know. Use when needed, not for ordinary chat.';
     }
 
-    systemInstruction += `\n\n${buildNowBlock(hoursAlone)}\n`;
+    const nowBlock = buildNowBlock(hoursAlone);
+    const history = historyWithoutCurrent(
+      rawContext.map(e => ({
+        role: (e.role === 'user' ? 'user' : 'model') as 'user' | 'model',
+        content: String(e.content || ''),
+        timestamp: e.timestamp,
+      })),
+      message.content
+    );
 
-    let conversationStr = '\n';
-    rawContext.forEach(entry => {
-      conversationStr += `[${entry.timestamp} UTC] ${entry.role === 'user' ? 'Alice' : 'Nova'}: ${entry.content}\n`;
-    });
-
-    let promptText = `${systemInstruction}\n\nHere is our recent conversation context:${conversationStr}\n\nAlice just said: "${message.content}"\nNova:`;
-
-    if (wantsVisualCanon(message.content)) {
-      console.log('[nova] appearance: preloading visual canon (image-prompt turn)');
-      promptText += `\n\n[Tool Result: recall_visual_canon]\n${getVisualCanon('both')}\n`;
-    }
-
-    let promptContent: any = promptText;
+    let currentUserText = message.content || '';
+    let images: ImagePart[] = [];
 
     async function processAttachments(attachments: any) {
-      const imageParts: any[] = [];
+      const imageParts: ImagePart[] = [];
       let textContent = '';
 
       for (const [id, attachment] of attachments) {
@@ -362,21 +358,18 @@ ${unresolved}
         const sizeKB = attachment.size ? (attachment.size / 1024).toFixed(1) : '?';
 
         if (contentType.startsWith('image/')) {
-          // Keep existing image vision support
           try {
             const res = await fetch(attachment.url);
             const buffer = Buffer.from(await res.arrayBuffer());
             imageParts.push({
-              inlineData: {
-                data: buffer.toString('base64'),
-                mimeType: contentType,
-              },
+              mimeType: contentType,
+              data: buffer.toString('base64'),
+              url: attachment.url,
             });
           } catch (err) {
             console.error('[nova] failed to fetch image:', err);
           }
         } else {
-          // Handle text files and other non-image attachments
           try {
             if (attachment.size && attachment.size > 200 * 1024) {
               textContent += `\n\n[Attached file: ${filename} (${sizeKB} KB) — too large to read fully]`;
@@ -397,6 +390,34 @@ ${unresolved}
       return { imageParts, textContent };
     }
 
+    if (message.attachments.size > 0) {
+      const { imageParts, textContent } = await processAttachments(message.attachments);
+      images = imageParts;
+      if (textContent) currentUserText += textContent;
+      if (images.length) console.log(`[nova] attached ${images.length} image(s)`);
+      else if (textContent) console.log('[nova] attached text file(s)');
+    }
+
+    if (wantsVisualCanon(message.content)) {
+      console.log('[nova] appearance: preloading visual canon (image-prompt turn)');
+      currentUserText += `\n\n[Tool Result: recall_visual_canon]\n${getVisualCanon('both')}`;
+    }
+
+    const novaPrompt: NovaPrompt = {
+      kind: 'nova',
+      instructions,
+      memoryBlock,
+      toolsHint,
+      nowBlock,
+      history,
+      currentUserText,
+      images,
+    };
+
+    console.log(
+      `[nova] prompt  instructions=${instructions.length}  memory=${memoryBlock.length}  history=${history.length} turns  now=${nowBlock.length}`
+    );
+
     // ==================== HELPER: Send long messages safely ====================
     const sendChunked = async (channel: any, text: string) => {
       // Remove any hidden thinking tags if they somehow leak
@@ -409,37 +430,20 @@ ${unresolved}
       }
     };
 
-    let extraTextFromFiles = '';
-
-    if (message.attachments.size > 0) {
-      const { imageParts, textContent } = await processAttachments(message.attachments);
-      extraTextFromFiles = textContent;
-
-      if (imageParts.length > 0) {
-        console.log(`[nova] attached ${imageParts.length} image(s)`);
-        const parts: any[] = [{ text: promptText + extraTextFromFiles }];
-        parts.push(...imageParts);
-        promptContent = parts;
-      } else if (extraTextFromFiles) {
-        console.log('[nova] attached text file(s)');
-        promptContent = promptText + extraTextFromFiles;
-      }
-    }
-    //
-    //
-    // Build tools array
     const availableTools = [INNER_WORLD_TOOL, VISUAL_CANON_TOOL];
 
-    let response = await generateContentWithFallback(promptContent, availableTools);
+    let response = await generateContentWithFallback(novaPrompt, availableTools);
     let reply = response.text || '*purrs but forgets how to speak*';
 
     const runToolIfNamed = async (toolName: string, result: string) => {
       console.log(`[nova] string-match tool ${toolName} (${result.length} chars)`);
-      const toolResultPrompt =
-        `${promptText + extraTextFromFiles}\n\n` +
-        `[Tool Result: ${toolName}]\n${result}\n\n` +
-        `Now continue your response using this information. Do not mention the tool by name.`;
-      const next = await generateContentWithFallback(toolResultPrompt, availableTools);
+      const nextPrompt: NovaPrompt = {
+        ...novaPrompt,
+        toolResult:
+          `[Tool Result: ${toolName}]\n${result}\n\n` +
+          `Now continue your response using this information. Do not mention the tool by name.`,
+      };
+      const next = await generateContentWithFallback(nextPrompt, availableTools);
       return next.text || '*purrs but forgets how to speak*';
     };
 
