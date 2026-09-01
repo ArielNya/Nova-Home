@@ -14,7 +14,7 @@ This isn't a simple chatbot that just responds when spoken to. It is a multi-thr
 * **Persistent Memory Architecture**: 
   * Uses `sqlite3` for a short-term interaction log.
   * A `consolidator` that periodically packs weekly memory databases into permanent, highly-condensed markdown lore files (`Nova 3D.md`). These core memories are organically injected back into the AI's system prompt.
-* **NanoGPT Image Generation**: `!draw <prompt>` generates images using your NanoGPT subscription (subscription-only API path).
+* **Grok Imagine**: `!draw <prompt>` generates images via xAI (`grok-imagine-image-2.0`). NanoGPT is opt-in (`!draw nano <prompt>`).
 
 ## Setup Instructions
 
@@ -53,7 +53,7 @@ Switch with:
 !model deepseek deepseek-v4-flash
 !model deepseek deepseek-v4-flash-vision-exp
 ```
-(`!model deepseek` lists them. Vision model is the one that can see attached images.)
+(`!model deepseek` lists them. Vision model is the one that can see attached images. `!models deepseek` hits the live catalog.)
 
 ## Using Grok (SuperGrok OAuth)
 Same device-code flow OpenCode and Hermes Agent use. No API key required if you have SuperGrok or X Premium.
@@ -69,7 +69,18 @@ Open the URL, enter the code, wait for the bot to confirm. Session is stored in 
 !model grok grok-4
 !model grok grok-build-0.1
 ```
-(`!model grok` lists them. Other `grok-*` ids are accepted.)
+(`!model grok` lists them. Other `grok-*` ids are accepted. `!models grok` hits the live xAI catalog.)
+
+Reasoning effort for grok-4.5 / grok-4.6 (cannot disable; default **high**):
+
+```
+!effort low
+!effort medium
+!effort high
+!effort xhigh
+```
+
+`xhigh` is grok-4.6 only (4.5 treats it as high). `!think` while on Grok sets the same thing.
 
 `!grok status` / `!grok logout`. Optional fallback: `XAI_API_KEY` in `.env` if OAuth returns 403 (xAI sometimes gates the OAuth API surface by tier).
 
@@ -88,8 +99,9 @@ NanoGPT provider gives:
 - Any model on your Pro/sub roster
 - Image understanding (attach pics)
 - `web_search` + `web_fetch` tools (client-executed via your NanoGPT sub for any tool-calling capable model)
-- `!draw <prompt>` - Generates anime-style images via the subscription-only image API
-- `!draw model=<model> <prompt>` - Choose a specific image model from your roster, e.g. `!draw model=flux-pro cute neko in hoodie` (model omitted = NanoGPT default)
+- `!draw <prompt>` — Grok Imagine (`grok-imagine-image-2.0`)
+- `!draw nano <prompt>` — NanoGPT subscription (anime-style suffix)
+- `!draw model=<model> <prompt>` — pick a model, e.g. `!draw model=flux-pro cute neko in hoodie`
 
 You can also use NanoGPT's model suffixes like `model:online` or `model:online/brave` directly as the id if you want native search routing.
 

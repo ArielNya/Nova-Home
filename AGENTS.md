@@ -111,9 +111,12 @@ Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`
 
 ```
 !model [provider] [id]     troca o cérebro de conversa
+!models [deepseek|grok]    catálogo live das APIs (handles)
 !grok login|status|logout  SuperGrok / X Premium OAuth (device code)
-!think off|low|high|max    reasoning do DeepSeek oficial (e effort do Grok)
-!draw [model=x] <prompt>   NanoGPT image, não Horde
+!think off|low|high|max    thinking do DeepSeek oficial
+!effort low|medium|high|xhigh  reasoning do Grok 4.5/4.6 (default high; xhigh só 4.6)
+!draw <prompt>             Grok Imagine (`grok-imagine-image-2.0`)
+!draw nano <prompt>        NanoGPT
 !toggle_auto               liga/desliga o cron
 !pack_week                 sqlite → week file, limpa DB
 !pack_forever              week → 3D, limpa week

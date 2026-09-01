@@ -6,9 +6,13 @@ import {
   generateImage,
   DEEPSEEK_MODELS,
   GROK_MODELS,
+  GROK_IMAGINE_MODEL,
   isGrokModelId,
   getDeepSeekThink,
   setDeepSeekThink,
+  getGrokEffort,
+  setGrokEffort,
+  listProviderModels,
   errDetail,
   resetGrokChain,
   grokChainStatus,
@@ -97,7 +101,7 @@ export async function handleIncomingMessage(message: Message) {
         return;
       }
       await message.channel.send(
-        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : current.provider === 'grok' ? `\nThinking: **${getDeepSeekThink()}** (\`!think\` — Grok cannot turn it off; \`off\`→\`low\`, \`max\`→\`xhigh\`)\nAuth: **${grokAuthSource()}**` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`, \`grok\`\n\n**DeepSeek:**\n${deepseekList}\n\n**Grok:**\n${grokList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
+        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : current.provider === 'grok' ? `\nEffort: **${getGrokEffort()}** (\`!effort low|medium|high|xhigh\`)\nAuth: **${grokAuthSource()}**` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`, \`grok\`\n\nCatalog: \`!models\` · \`!models deepseek\` · \`!models grok\`\n\n**DeepSeek:**\n${deepseekList}\n\n**Grok:**\n${grokList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
       );
       return;
     }
@@ -132,7 +136,7 @@ export async function handleIncomingMessage(message: Message) {
       extra = `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)`;
     } else if (provider === 'grok') {
       const src = grokAuthSource();
-      extra = `\nThinking: **${getDeepSeekThink()}** (\`!think\` maps onto Grok effort)\nAuth: **${src}**`;
+      extra = `\nEffort: **${getGrokEffort()}** (\`!effort low|medium|high|xhigh\`)\nAuth: **${src}**`;
       if (src === 'none') extra += '\nNot logged in. Run `!grok login` (SuperGrok / X Premium) or set `XAI_API_KEY`.';
     }
     await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}${extra}`);
@@ -151,7 +155,7 @@ export async function handleIncomingMessage(message: Message) {
         ? new Date(st.expiresAt).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })
         : 'n/a';
       await message.channel.send(
-        `**Grok auth:** ${src}\n${st.hint}\nExpires (São Paulo): ${exp}\nEnv key fallback: **${process.env.XAI_API_KEY?.trim() ? 'yes' : 'no'}**\nContext: ${grokChainStatus()}\nCurrent brain: **${current.id}** (${current.provider})\n\n\`!grok login\` · \`!grok logout\` · \`!model grok grok-4.6\``
+        `**Grok auth:** ${src}\n${st.hint}\nExpires (São Paulo): ${exp}\nEnv key fallback: **${process.env.XAI_API_KEY?.trim() ? 'yes' : 'no'}**\nContext: ${grokChainStatus()}\nEffort: **${getGrokEffort()}** (\`!effort low|medium|high|xhigh\`)\nCurrent brain: **${current.id}** (${current.provider})\n\n\`!grok login\` · \`!grok logout\` · \`!model grok grok-4.6\` · \`!models grok\``
       );
       return;
     }
@@ -191,19 +195,41 @@ export async function handleIncomingMessage(message: Message) {
     return;
   }
 
-  if (message.content.startsWith('!think') || message.content.startsWith('!reasoning')) {
+  if (message.content === '!models' || message.content.startsWith('!models ')) {
+    const whichRaw = message.content.split(/\s+/)[1]?.toLowerCase();
+    const which = whichRaw === 'deepseek' || whichRaw === 'grok' ? whichRaw : 'both';
+    const wait = await message.channel.send('*asking the APIs for their catalogs...*');
+    try {
+      const text = await listProviderModels(which);
+      await wait.delete().catch(() => {});
+      const chunkSize = 1900;
+      for (let i = 0; i < text.length; i += chunkSize) {
+        await message.channel.send(text.slice(i, i + chunkSize));
+      }
+    } catch (e) {
+      console.warn('[nova] !models failed:', errDetail(e));
+      await wait.edit(`Could not list models: ${errDetail(e)}`);
+    }
+    return;
+  }
+
+  const thinkCmd = message.content.split(/\s+/)[0]?.toLowerCase();
+  if (thinkCmd === '!think' || thinkCmd === '!reasoning' || thinkCmd === '!effort') {
     const parts = message.content.split(/\s+/).filter(Boolean);
-    const grokNote =
-      getCurrentModel().provider === 'grok'
-        ? ' On Grok, `off` maps to `low` (cannot disable) and `max` maps to `xhigh` on grok-4.6.'
-        : ' Official DeepSeek API only.';
+    const onGrok = getCurrentModel().provider === 'grok' || thinkCmd === '!effort';
     if (parts.length < 2) {
-      await message.channel.send(
-        `Thinking is **${getDeepSeekThink()}**.${grokNote}\nSet with \`!think off|low|high|max\`.`
-      );
+      if (onGrok) {
+        await message.channel.send(
+          `Grok effort is **${getGrokEffort()}**.\nSet with \`!effort low|medium|high|xhigh\` (4.5 has no xhigh — it becomes high). DeepSeek: \`!think off|low|high|max\` (now **${getDeepSeekThink()}**).`
+        );
+      } else {
+        await message.channel.send(
+          `DeepSeek thinking is **${getDeepSeekThink()}**.\nSet with \`!think off|low|high|max\`. Grok 4.5/4.6: \`!effort low|medium|high|xhigh\` (now **${getGrokEffort()}**).`
+        );
+      }
       return;
     }
-    await message.channel.send(setDeepSeekThink(parts[1]));
+    await message.channel.send(onGrok ? setGrokEffort(parts[1]) : setDeepSeekThink(parts[1]));
     return;
   }
 
@@ -309,31 +335,50 @@ ${unresolved}
     await message.channel.send(result);
     return;
   }
-  if (message.content.startsWith('!draw ')) {
-    let rest = message.content.replace('!draw ', '').trim();
+  if (message.content === '!draw' || message.content.startsWith('!draw ')) {
+    let rest = message.content.replace(/^!draw\s*/i, '').trim();
+    if (!rest) {
+      await message.channel.send(
+        `Usage:\n\`!draw <prompt>\` — Grok Imagine (\`${GROK_IMAGINE_MODEL}\`)\n\`!draw nano <prompt>\` — NanoGPT\n\`!draw model=<id> <prompt>\` — pick a model`
+      );
+      return;
+    }
 
-    // Support choosing model: !draw model=flux-pro a cute neko
-    // or !draw model:flux-pro a cute neko
+    let provider: 'grok' | 'nano' = 'grok';
     let imageModel: string | undefined;
+
     const modelMatch = rest.match(/^(?:model[:=]|--model\s+)([^\s]+)\s+(.+)$/i);
     if (modelMatch) {
       imageModel = modelMatch[1];
       rest = modelMatch[2];
+      if (imageModel && !/^grok/i.test(imageModel)) provider = 'nano';
+    } else if (/^nano\s+/i.test(rest)) {
+      provider = 'nano';
+      rest = rest.replace(/^nano\s+/i, '');
     }
 
-    const prompt = rest;
-    const modelLabel = imageModel ? ` [${imageModel}]` : '';
-    const waitMsg = await message.channel.send(`*drawing${modelLabel}: "${prompt}"...* 🎨`);
+    const prompt = rest.trim();
+    if (!prompt) {
+      await message.channel.send('Need a prompt after `!draw`.');
+      return;
+    }
+
+    const modelLabel = imageModel || (provider === 'grok' ? GROK_IMAGINE_MODEL : 'nano');
+    const waitMsg = await message.channel.send(`*drawing [${modelLabel}]: "${prompt}"...* 🎨`);
     try {
-      const imageBuffer = await generateImage(prompt, imageModel);
-      await waitMsg.delete();
+      const imageBuffer = await generateImage(prompt, { model: imageModel, provider });
+      await waitMsg.delete().catch(() => {});
       await message.channel.send({
         content: `Here is your drawing! 🖤`,
         files: [{ attachment: imageBuffer, name: 'drawing.png' }],
       });
     } catch (err) {
-      console.error('[nova] drawing error:', err);
-      await waitMsg.edit('*failed to draw that... my visual cortex glitched.*');
+      console.error('[nova] drawing error:', errDetail(err));
+      const hint =
+        provider === 'grok'
+          ? ' Need `!grok login` or `XAI_API_KEY`. Or `!draw nano <prompt>` for NanoGPT.'
+          : '';
+      await waitMsg.edit(`*failed to draw that.* ${errDetail(err)}.${hint}`);
     }
     return;
   }
@@ -376,7 +421,32 @@ ${unresolved}
 
   if (message.content === '!help') {
     await message.channel.send(
-      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model deepseek deepseek-v4-pro\`, \`!model grok grok-4.6\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`. Type \`!model\` for the full list.\n\`!grok login|status|logout\` - SuperGrok / X Premium OAuth (device code, same as OpenCode/Hermes). Optional fallback: \`XAI_API_KEY\`.\n\`!think off|low|high|max\` - DeepSeek thinking, or Grok reasoning effort. Alias: \`!reasoning\`.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!compress_3d\` - Distills Nova_3D.md in place (keeps Nova_3D.bak.md).\n\`!now\` - Shows the hot-state vignette injected this turn.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
+      [
+        '**Nova — commands**',
+        '',
+        '**brain**',
+        '`!model <provider> <id>`  switch  (gemini / openrouter / nanogpt / deepseek / grok)',
+        '`!models`  `!models deepseek`  `!models grok`  live API handles',
+        '`!think off|low|high|max`  DeepSeek thinking',
+        '`!effort low|medium|high|xhigh`  Grok 4.5/4.6 reasoning (default high; xhigh is 4.6 only)',
+        '`!grok login|status|logout`  SuperGrok OAuth',
+        '',
+        '**draw**',
+        `\`!draw <prompt>\`  Grok Imagine (\`${GROK_IMAGINE_MODEL}\`)`,
+        '`!draw nano <prompt>`  NanoGPT',
+        '`!draw model=<id> <prompt>`  pick a model',
+        '',
+        '**memory**',
+        '`!pack_week`  `!pack_forever`  `!compress_3d`',
+        '`!now`  `!mood`  `!relationship_state`  `!update_temperature`',
+        '`!recent_diary`  `!recent_dreams`  `!inner_world`',
+        '`!export_brain`',
+        '',
+        '**other**',
+        '`!toggle_auto`  autonomous diary/dream/double-text',
+        '',
+        'Talk normally for everything else.',
+      ].join('\n')
     );
     return;
   }

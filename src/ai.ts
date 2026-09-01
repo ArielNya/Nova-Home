@@ -67,6 +67,7 @@ async function getGrokClient() {
 
 export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek' | 'grok';
 export type ThinkLevel = 'off' | 'low' | 'high' | 'max';
+export type GrokEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 interface ModelConfig {
   id: string;
@@ -84,6 +85,8 @@ export const DEEPSEEK_MODELS = [
 export const DEEPSEEK_VISION_MODEL = 'deepseek-v4-flash-vision-exp';
 
 export const GROK_MODELS = ['grok-4.6', 'grok-4.5', 'grok-4', 'grok-build-0.1'] as const;
+
+export const GROK_IMAGINE_MODEL = 'grok-imagine-image-2.0';
 
 export function isGrokModelId(id: string): boolean {
   const s = id.trim();
@@ -145,6 +148,34 @@ export function setDeepSeekThink(level: string): string {
     : `DeepSeek reasoning effort set to **${next}**.`;
 }
 
+let grokEffort: GrokEffort = 'high';
+
+const GROK_EFFORT_ALIASES: Record<string, GrokEffort> = {
+  low: 'low',
+  medium: 'medium',
+  med: 'medium',
+  mid: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  'x-high': 'xhigh',
+  max: 'xhigh',
+  off: 'low',
+  none: 'low',
+};
+
+export function getGrokEffort(): GrokEffort {
+  return grokEffort;
+}
+
+export function setGrokEffort(level: string): string {
+  const next = GROK_EFFORT_ALIASES[level.toLowerCase()];
+  if (!next) {
+    return `Grok effort must be \`low\`, \`medium\`, \`high\`, or \`xhigh\`. Current: **${grokEffort}**`;
+  }
+  grokEffort = next;
+  return `Grok reasoning effort set to **${next}**. (4.5: low/medium/high — 4.6 also has xhigh; cannot turn off)`;
+}
+
 function deepseekThinkOptions(model: ModelConfig, isConversation: boolean) {
   const level = model.think ?? (isConversation ? deepseekThink : 'low');
   if (level === 'off') return { thinking: { type: 'disabled' as const } };
@@ -160,13 +191,12 @@ function deepseekReasoning(model: ModelConfig, isConversation: boolean) {
   return { reasoning: { effort: level === 'off' ? 'none' : level } };
 }
 
-/** xAI grok-4.6/4.5: low | medium | high | xhigh. Cannot disable. */
-function grokReasoning(model: ModelConfig, isConversation: boolean) {
-  const level = model.think ?? (isConversation ? deepseekThink : 'low');
-  const id = (model.id || '').toLowerCase();
-  let effort = 'high';
-  if (level === 'off' || level === 'low') effort = 'low';
-  else if (level === 'max') effort = id.includes('4.6') ? 'xhigh' : 'high';
+/** xAI grok-4.6/4.5: low | medium | high | xhigh. Cannot disable. Default high. */
+function grokReasoning(_model: ModelConfig, isConversation: boolean) {
+  if (!isConversation) return { reasoning: { effort: 'low' as GrokEffort } };
+  const id = (_model.id || '').toLowerCase();
+  let effort: GrokEffort = grokEffort;
+  if (effort === 'xhigh' && !id.includes('4.6')) effort = 'high';
   return { reasoning: { effort } };
 }
 
@@ -283,6 +313,96 @@ function clip(s: string, n = 100): string {
     .replace(/\s+/g, ' ')
     .trim();
   return t.length > n ? t.slice(0, n) + '…' : t;
+}
+
+async function fetchModelCatalog(baseURL: string, apiKey: string): Promise<string[]> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const url = `${baseURL.replace(/\/$/, '')}/models`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const json: any = await res.json();
+    const rows = json.data || json.models || [];
+    const ids = rows.map((m: any) => String(m.id || m.name || m || '')).filter(Boolean);
+    return [...new Set(ids)].sort();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function formatHandleList(ids: string[], notes: Record<string, string>): string {
+  return ids
+    .map(id => {
+      const note = notes[id] ? ` — ${notes[id]}` : '';
+      return `\`${id}\`${note}`;
+    })
+    .join('\n');
+}
+
+const DEEPSEEK_HANDLE_NOTES: Record<string, string> = {
+  'deepseek-v4-flash': 'fast chat / tasks',
+  'deepseek-v4-pro': 'stronger chat',
+  'deepseek-v4-flash-vision-exp': 'only one that sees attached images',
+};
+
+const GROK_HANDLE_NOTES: Record<string, string> = {
+  'grok-4.6': 'flagship. effort: low medium high xhigh',
+  'grok-4.5': 'previous flagship. effort: low medium high',
+  'grok-4': 'older chat',
+  'grok-build-0.1': 'coding / grok build',
+  'grok-imagine-image-2.0': 'default !draw',
+};
+
+export async function listProviderModels(which: 'deepseek' | 'grok' | 'both' = 'both'): Promise<string> {
+  const chunks: string[] = [];
+
+  if (which === 'deepseek' || which === 'both') {
+    const key = (process.env.DEEPSEEK_API_KEY || '').trim();
+    let ids: string[] = [...DEEPSEEK_MODELS];
+    let source = 'known handles';
+    if (key) {
+      try {
+        const live = await fetchModelCatalog('https://api.deepseek.com', key);
+        if (live.length) {
+          ids = [...new Set([...live, ...DEEPSEEK_MODELS])].sort();
+          source = 'live GET /models + known handles';
+        }
+      } catch (e) {
+        console.warn('[nova] models deepseek live catalog failed:', errDetail(e));
+      }
+    }
+    chunks.push(
+      `**DeepSeek** (official API — ${source})\n${formatHandleList(ids, DEEPSEEK_HANDLE_NOTES)}\n\nswitch: \`!model deepseek <id>\`\nthinking: \`!think off|low|high|max\``
+    );
+  }
+
+  if (which === 'grok' || which === 'both') {
+    let ids: string[] = [...GROK_MODELS, GROK_IMAGINE_MODEL];
+    let source = 'known handles';
+    try {
+      const token = await getGrokAccessToken();
+      const live = await fetchModelCatalog('https://api.x.ai/v1', token);
+      if (live.length) {
+        ids = [...new Set([...live, ...GROK_MODELS, GROK_IMAGINE_MODEL])].sort();
+        source = 'live GET /models + known handles';
+      }
+    } catch (e) {
+      console.warn('[nova] models grok live catalog failed:', errDetail(e));
+    }
+    const chat = ids.filter(id => !/imagine|image|video|tts|voice|audio/i.test(id));
+    const media = ids.filter(id => /imagine|image|video|tts|voice|audio/i.test(id));
+    let body = `**Grok** (xAI — ${source})\n`;
+    if (chat.length) body += `chat:\n${formatHandleList(chat, GROK_HANDLE_NOTES)}\n`;
+    if (media.length) body += `\nimagine / media:\n${formatHandleList(media, GROK_HANDLE_NOTES)}\n`;
+    body += `\nswitch: \`!model grok <id>\`\neffort (4.5/4.6): \`!effort low|medium|high|xhigh\`  now **${grokEffort}**\ndraw: \`!draw <prompt>\` → \`${GROK_IMAGINE_MODEL}\``;
+    chunks.push(body);
+  }
+
+  return chunks.join('\n\n');
 }
 
 // ==================== TOOL HELPERS ====================
@@ -978,32 +1098,60 @@ export async function generateContentWithFallback(
   throw new Error('All fallback models failed.');
 }
 
-// ==================== NANOGPT IMAGE GENERATION (replaces AI Horde) ====================
-// Uses the subscription-only path so only roster-included image models are available.
-// Always returns a Buffer (b64_json) so handler can attach directly.
+// ==================== IMAGE GENERATION ====================
+// Default: Grok Imagine (xAI). NanoGPT is opt-in via !draw nano / model=flux-*.
 
-export async function generateImage(prompt: string, model?: string): Promise<Buffer> {
+export type DrawProvider = 'grok' | 'nano';
+
+async function bufferFromImageResponse(response: any, label: string): Promise<Buffer> {
+  const data = response?.data;
+  if (!data || !data[0]) throw new Error(`${label} did not return image data`);
+  const first = data[0];
+  if (first.b64_json) return Buffer.from(first.b64_json, 'base64');
+  if (first.url) {
+    const res = await fetch(first.url);
+    if (!res.ok) throw new Error(`${label} image url fetch failed (${res.status})`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  throw new Error(`${label} did not return b64_json or url`);
+}
+
+async function generateGrokImage(prompt: string, model?: string): Promise<Buffer> {
+  const client = await getGrokClient();
+  const id = model || GROK_IMAGINE_MODEL;
+  console.log(`[nova] draw grok/${id}  "${clip(prompt, 80)}"`);
+  const response: any = await client.images.generate({
+    model: id,
+    prompt,
+    n: 1,
+    response_format: 'b64_json',
+  } as any);
+  return bufferFromImageResponse(response, `Grok Imagine (${id})`);
+}
+
+async function generateNanoImage(prompt: string, model?: string): Promise<Buffer> {
   const client = getNanoImageClient();
-  // Keep the exact anime-style enhancement that was used with Horde
   const enhancedPrompt = prompt + ', high quality anime style digital art, highly detailed';
-
+  console.log(`[nova] draw nano/${model || 'default'}  "${clip(prompt, 80)}"`);
   const response = await client.images.generate({
-    // model from your subscription roster, e.g. "chroma", "hidream", "flux-pro" etc.
     ...(model ? { model } : {}),
     prompt: enhancedPrompt,
     n: 1,
     size: '1024x1024',
     response_format: 'b64_json',
   });
+  return bufferFromImageResponse(response, 'NanoGPT');
+}
 
-  const data = response.data;
-  if (!data || !data[0]) {
-    throw new Error('NanoGPT did not return image data');
-  }
-  const b64 = data[0].b64_json;
-  if (!b64) {
-    throw new Error('NanoGPT did not return image data (b64_json)');
-  }
+export async function generateImage(
+  prompt: string,
+  opts?: string | { model?: string; provider?: DrawProvider }
+): Promise<Buffer> {
+  const parsed = typeof opts === 'string' ? { model: opts } : opts || {};
+  const model = parsed.model;
+  let provider: DrawProvider = parsed.provider || 'grok';
+  if (!parsed.provider && model && !/^grok/i.test(model)) provider = 'nano';
 
-  return Buffer.from(b64, 'base64');
+  if (provider === 'nano') return generateNanoImage(prompt, model);
+  return generateGrokImage(prompt, model);
 }
