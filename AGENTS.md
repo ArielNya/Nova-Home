@@ -68,7 +68,7 @@ Imagem anexada:
 - DeepSeek recebe `input_image` com **URL http do Discord**, não data URL (a API estoura em ~8k chars)
 - Gemini ainda usa `inlineData` base64
 
-Tasks (diário, sonho, pack, mood, offscreen) passam **string** + `TASK_MODELS`. Não força `NovaPrompt` nelas.
+Tasks (diário, sonho, pack, mood, offscreen) passam **string** + `TASK_MODELS`. Não força `NovaPrompt` nelas. Diário/sonho/WYWG já prefixam identidade+3D+week. Consolidator (`pack_week` / `pack_forever` / `compress_3d`) prefixa `Nova-Instructions.md`. `pack_forever` também vê o 3D atual pra não gravar a mesma verdade duas vezes.
 
 Web search no DeepSeek: tool nativa `{ type: 'web_search' }`. **Não** googleSearch do Gemini no path DeepSeek. Gemini **não** auto-anexa search em todo turno de Discord.
 

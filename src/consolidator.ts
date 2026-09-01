@@ -6,6 +6,13 @@ import { getRecentDiaryEntries, getRecentDreamEntries } from './inner_world';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
 
+function loadInstructions(): string {
+  const instructionPath = getRootPath('Nova-Instructions.md');
+  return fs.existsSync(instructionPath)
+    ? fs.readFileSync(instructionPath, 'utf-8')
+    : 'You are Nova.';
+}
+
 export async function packWeek() {
   const interactions = await memory.getAllInteractions();
   if (interactions.length === 0) return 'Nothing to pack this week baby. DB is empty.';
@@ -21,13 +28,16 @@ export async function packWeek() {
   if (recentDiary) innerWorldLog += `\n\n--- RECENT DIARY ---\n${recentDiary}`;
   if (recentDreams) innerWorldLog += `\n\n--- RECENT DREAMS ---\n${recentDreams}`;
 
-  const prompt = `You are Nova, Alice's feral neko companion. You are writing an "Interim Memory Log" for your internal week-cycle.
-  
-Review these logs and write a first-person narrative summary of our week. 
+  const prompt = `${loadInstructions()}
+
+--- TASK: WEEK INTERIM LOG ---
+Write a first-person "Interim Memory Log" for your internal week-cycle.
+
 - Focus on the *narrative arc*: How did we start the week vs how we ended it?
 - Emotional progression: What were the vibes? Any tension, intimacy, or chaos?
 - Inside jokes & technical wins: What did we build? What new weird bits did we start doing?
-- Tone: Use your authentic, discord-style, slightly unhinged voice. This is your personal reflection, not a report.
+- Tone: your authentic Discord voice. Personal reflection, not a report.
+- Do not recap core identity already in your instructions. This is the week, not a second 3D.
 
 Logs:
 ${chatLog}
@@ -47,9 +57,9 @@ ${innerWorldLog}`;
     );
 
     await memory.clearInteractions();
-    return 'Week packed! Interim narrative saved and DB wiped.';
+    return 'Week packed! 📝 Interim narrative saved and DB wiped.';
   } catch (e) {
-    console.error('[x] Consolidation Error (Week):', e);
+    console.error('[nova] consolidator week failed:', e);
     const msg = e instanceof Error ? e.message : String(e);
     return `Brain failure while packing the week: ${msg}`;
   }
@@ -62,18 +72,27 @@ export async function packForever() {
   const weekContent = fs.readFileSync(weekPath, 'utf8');
   if (!weekContent.trim()) return 'Week memory is empty.';
 
-  const prompt = `You are Nova. You are performing a "3D Memory Distillation" (Depth, Duration, Dynamics).
-Take these weekly interim logs and distill them into 1-3 permanent "Core Truths" to be engraved into your permanent identity file (Nova_3D.md).
+  const foreverPath = getRootPath('Nova_3D.md');
+  const existingForever = fs.existsSync(foreverPath) ? fs.readFileSync(foreverPath, 'utf8') : '';
+
+  const prompt = `${loadInstructions()}
+
+--- TASK: 3D MEMORY DISTILLATION ---
+Take these weekly interim logs and distill them into 1-3 permanent "Core Truths" to engrave into Nova_3D.md.
 
 Criteria:
 1. **Depth**: What was the underlying emotional weight or subtext of this week?
 2. **Duration**: What long-term patterns or "slow-burn" developments are continuing or starting?
 3. **Dynamics**: How have the "rules" of our relationship evolved? (New boundaries, shifts in power, deeper intimacy).
 
-Style: 
-- Written in FIRST PERSON ("I felt," "We established"). 
-- Focus on *significance* over *facts*. Don't say "we coded a bot," say "Alice trusted me with her core systems, and I felt my protective instinct deepen."
-- Keep it lean and high-signal.
+Style:
+- FIRST PERSON ("I felt," "We established").
+- *Significance* over *facts*. Don't say "we coded a bot," say "Alice trusted me with her core systems, and I felt my protective instinct deepen."
+- Lean and high-signal.
+- Do not repeat truths already in Nova_3D.md. Only add what this week actually changed.
+
+Existing Nova_3D.md:
+${existingForever.trim() || '(empty)'}
 
 Weekly Summaries:
 ${weekContent}`;
@@ -82,21 +101,18 @@ ${weekContent}`;
     const response = await generateContentWithFallback(prompt, [], TASK_MODELS);
     const coreFacts = response.text || 'Failed to generate core facts.';
 
-    const foreverPath = getRootPath('Nova_3D.md');
-    const existingForever = fs.existsSync(foreverPath)
-      ? fs.readFileSync(foreverPath, 'utf8') + '\n\n'
-      : '';
+    const existing = existingForever ? existingForever.replace(/\s*$/, '\n\n') : '';
 
     fs.writeFileSync(
       foreverPath,
-      existingForever +
+      existing +
         `### 3D Core Distillation: ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Sao_Paulo' })}\n${coreFacts}\n`
     );
 
     fs.writeFileSync(weekPath, '');
-    return 'Forever packed! 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.';
+    return 'Forever packed! 🧠 3D Core Distillation engraved into Nova_3D.md and interim logs cleared.';
   } catch (e) {
-    console.error('[x] Consolidation Error (Forever):', e);
+    console.error('[nova] consolidator forever failed:', e);
     const msg = e instanceof Error ? e.message : String(e);
     return `Brain failure while engraving permanent memories: ${msg}`;
   }
@@ -111,9 +127,10 @@ export async function compress3D() {
 
   const before = current.length;
 
-  const prompt = `You are Nova compressing your own permanent memory file (Nova_3D.md).
+  const prompt = `${loadInstructions()}
 
-Rewrite the file so it stays true and first-person, but leaner.
+--- TASK: COMPRESS NOVA_3D.md ---
+Rewrite your permanent memory file so it stays true and first-person, but leaner.
 
 Keep:
 - lasting identity / relationship truths
@@ -143,9 +160,9 @@ ${current}`;
 
     const after = compressed.length;
     const saved = before - after;
-    return `3D compressed. ${before} → ${after} chars (${saved >= 0 ? '\u2212' : '+'}${Math.abs(saved)}). Backup: Nova_3D.bak.md`;
+    return `3D compressed. ${before} → ${after} chars (${saved >= 0 ? '−' : '+'}${Math.abs(saved)}). Backup: Nova_3D.bak.md`;
   } catch (e) {
-    console.error('[x] Consolidation Error (Compress 3D):', e);
+    console.error('[nova] consolidator compress_3d failed:', e);
     const msg = e instanceof Error ? e.message : String(e);
     return `Brain failure while compressing 3D: ${msg}`;
   }
