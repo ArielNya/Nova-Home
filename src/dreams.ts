@@ -127,11 +127,15 @@ export function startDreamsLoop(client: Client) {
       const relState = loadRelationshipState();
       const hoursSinceRel =
         (Date.now() - new Date(relState.last_updated).getTime()) / (1000 * 60 * 60);
-      if (hoursSince < 24 && hoursSinceRel >= 6 && Math.random() < 0.25) {
+      if (hoursSinceRel >= 6 && Math.random() < 0.25) {
         const relCtx = await memory.getContext(8);
-        const summary = relCtx.map(m => `${m.role}: ${m.content}`).join('\n');
-        const result = await updateRelationshipTemperature(summary);
-        console.log(`[relationship] ${result}`);
+        const summary = relCtx.map(m => `${m.role}: ${m.content}`).join('\n').trim();
+        if (summary) {
+          const result = await updateRelationshipTemperature(summary);
+          console.log(`[relationship] ${result}`);
+        } else {
+          console.log('[relationship] skip: empty context');
+        }
       }
 
       if (hoursSince >= 3 && hoursSinceWywg >= 10 && mainChannel) {
