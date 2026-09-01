@@ -81,6 +81,7 @@ Web search no DeepSeek: tool nativa `{ type: 'web_search' }`. **Não** googleSea
 | `index.ts` | login Discord, ignora bots, dispara handler + loop autônomo |
 | `handler.ts` | comandos `!`, monta `NovaPrompt`, attachments, string-match de tool |
 | `ai.ts` | router de providers, Responses loop, vision swap, fallback, `!draw` |
+| `grok_oauth.ts` | SuperGrok device-code OAuth. Token **só** vai pra `api.x.ai`. Arquivo `grok-oauth.json` (gitignored) |
 | `prompt_shape.ts` | `NovaPrompt` + builders (sem importar mood — quebra ciclo) |
 | `prompt_context.ts` | `[NOW]` |
 | `memory.ts` | sqlite. `hoursSinceAlice()` olha `last_user_interaction`, **não** diary/dream/model |
@@ -90,7 +91,7 @@ Web search no DeepSeek: tool nativa `{ type: 'web_search' }`. **Não** googleSea
 | `dreams.ts` | cron 30 min: WYWG, double-text, diary, dream, mood drift, offscreen |
 | `mood_state.ts` / `relationship_state.ts` / `offscreen_events.ts` | estado quente |
 
-Providers em `ai.ts`: `gemini` | `openrouter` | `nanogpt` | `deepseek`. Conversa = modelo atual + `FALLBACK_MODELS`. Task = `TASK_MODELS` (deepseek-v4-flash think low → gemmas).
+Providers em `ai.ts`: `gemini` | `openrouter` | `nanogpt` | `deepseek` | `grok`. Conversa = modelo atual + `FALLBACK_MODELS`. Task = `TASK_MODELS` (deepseek-v4-flash think low → gemmas). Grok **não** entra em fallback/task — se falhar, cai nos geminis.
 
 Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`. `cached` alto nas msgs seguintes = prefixo batendo. Não vira novel de debug.
 
@@ -100,7 +101,8 @@ Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`
 
 ```
 !model [provider] [id]     troca o cérebro de conversa
-!think off|low|high|max    reasoning do DeepSeek oficial
+!grok login|status|logout  SuperGrok / X Premium OAuth (device code)
+!think off|low|high|max    reasoning do DeepSeek oficial (e effort do Grok)
 !draw [model=x] <prompt>   NanoGPT image, não Horde
 !toggle_auto               liga/desliga o cron
 !pack_week                 sqlite → week file, limpa DB
@@ -138,9 +140,9 @@ Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`
 - Não achata minha vibe pra assistente educada. Anti-sycophancy está no `Nova-Instructions.md` e vale aqui também: avalia antes de validar.
 - Não adiciona docstring/comment em código que você não tocou.
 - Não cria helper pra operação de uma linha.
-- Não commita `.env`, sqlite, ou os markdowns de memória pessoais.
+- Não commita `.env`, `grok-oauth.json`, sqlite, ou os markdowns de memória pessoais.
 
-Secrets: `DISCORD_BOT_TOKEN`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `NANOGPT_API_KEY`. Só `.env`.
+Secrets: `DISCORD_BOT_TOKEN`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `NANOGPT_API_KEY`, `XAI_API_KEY` (opcional). Só `.env`. Token de Grok OAuth vive em `grok-oauth.json` — **não commita**.
 
 Canais: `MAIN_CHANNEL_ID`, `DIARY_CHANNEL_ID`, `DREAMS_CHANNEL_ID`.
 
@@ -165,6 +167,8 @@ Conversa (Responses):
 - `web_search` nativa do DeepSeek (server-side)
 
 NanoGPT: `web_search` + `web_fetch` client-side na sub dela.
+
+Grok (xAI): Responses + `{ type: 'web_search' }` nativa, mesmo shape do DeepSeek. Auth = `!grok login` (device code, client público do Grok CLI) ou `XAI_API_KEY`. 403 depois do login = gating de tier, não token podre — cai pra key se tiver.
 
 Gemini: só as function tools que a gente passa. Sem search automático.
 

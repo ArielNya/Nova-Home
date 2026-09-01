@@ -5,11 +5,20 @@ import {
   getCurrentModel,
   generateImage,
   DEEPSEEK_MODELS,
+  GROK_MODELS,
+  isGrokModelId,
   getDeepSeekThink,
   setDeepSeekThink,
   errDetail,
   type Provider,
 } from './ai';
+import {
+  requestGrokDeviceCode,
+  pollGrokDeviceToken,
+  grokOAuthStatus,
+  grokOAuthLogout,
+  grokAuthSource,
+} from './grok_oauth';
 import { memory } from './memory';
 import { getFullRecentInnerWorld } from './inner_world';
 import * as fs from 'fs';
@@ -22,6 +31,10 @@ import { buildNowBlock, historyWithoutCurrent, type NovaPrompt, type ImagePart }
 import { getVisualCanon, wantsVisualCanon, parseWhoFromText } from './appearance';
 
 const getRootPath = (filename: string) => path.resolve(process.cwd(), filename);
+
+const PROVIDERS: Provider[] = ['gemini', 'openrouter', 'nanogpt', 'deepseek', 'grok'];
+
+let grokLoginBusy = false;
 
 // ==================== TOOL DEFINITIONS ====================
 const INNER_WORLD_TOOL = {
@@ -65,6 +78,7 @@ export async function handleIncomingMessage(message: Message) {
     const parts = message.content.split(/\s+/).filter(Boolean);
     const current = getCurrentModel();
     const deepseekList = DEEPSEEK_MODELS.map(m => `\`!model deepseek ${m}\``).join('\n');
+    const grokList = GROK_MODELS.map(m => `\`!model grok ${m}\``).join('\n');
 
     if (parts.length < 3) {
       if (parts[1]?.toLowerCase() === 'deepseek') {
@@ -73,8 +87,15 @@ export async function handleIncomingMessage(message: Message) {
         );
         return;
       }
+      if (parts[1]?.toLowerCase() === 'grok') {
+        const src = grokAuthSource();
+        await message.channel.send(
+          `**Grok models** (xAI — SuperGrok OAuth or \`XAI_API_KEY\`):\n${grokList}\n\nOther \`grok-*\` ids also work.\nAuth: **${src}**${src === 'none' ? ' — \`!grok login\`' : ''}\n\nCurrent: **${current.id}** (${current.provider})`
+        );
+        return;
+      }
       await message.channel.send(
-        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`\n\n**DeepSeek:**\n${deepseekList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
+        `I'm currently using **${current.id}** (${current.provider})! 💕${current.provider === 'deepseek' ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)` : current.provider === 'grok' ? `\nThinking: **${getDeepSeekThink()}** (\`!think\` — Grok cannot turn it off; \`off\`→\`low\`, \`max\`→\`xhigh\`)\nAuth: **${grokAuthSource()}**` : ''}\n\nUsage: \`!model <provider> <model_id>\`\nProviders: \`gemini\`, \`openrouter\`, \`nanogpt\`, \`deepseek\`, \`grok\`\n\n**DeepSeek:**\n${deepseekList}\n\n**Grok:**\n${grokList}\n\nOther examples: \`!model gemini gemma-4-31b-it\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <roster-id>\``
       );
       return;
     }
@@ -82,9 +103,9 @@ export async function handleIncomingMessage(message: Message) {
     const provider = parts[1].toLowerCase() as Provider;
     const modelId = parts[2];
 
-    if (!['gemini', 'openrouter', 'nanogpt', 'deepseek'].includes(provider)) {
+    if (!PROVIDERS.includes(provider)) {
       await message.channel.send(
-        'Provider must be `gemini`, `openrouter`, `nanogpt` or `deepseek`!'
+        'Provider must be `gemini`, `openrouter`, `nanogpt`, `deepseek` or `grok`!'
       );
       return;
     }
@@ -96,20 +117,86 @@ export async function handleIncomingMessage(message: Message) {
       return;
     }
 
+    if (provider === 'grok' && !isGrokModelId(modelId)) {
+      await message.channel.send(
+        `Unknown Grok model \`${modelId}\`.\nOptions:\n${grokList}\n(or any id starting with \`grok-\`)`
+      );
+      return;
+    }
+
     const result = switchModel(modelId, provider);
-    const thinkNote =
-      provider === 'deepseek'
-        ? `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)`
-        : '';
-    await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}${thinkNote}`);
+    let extra = '';
+    if (provider === 'deepseek') {
+      extra = `\nThinking: **${getDeepSeekThink()}** (\`!think off|low|high|max\`)`;
+    } else if (provider === 'grok') {
+      const src = grokAuthSource();
+      extra = `\nThinking: **${getDeepSeekThink()}** (\`!think\` maps onto Grok effort)\nAuth: **${src}**`;
+      if (src === 'none') extra += '\nNot logged in. Run `!grok login` (SuperGrok / X Premium) or set `XAI_API_KEY`.';
+    }
+    await message.channel.send(`*re-wiring my neurons...* 🧠✨\n${result}${extra}`);
+    return;
+  }
+
+  if (message.content === '!grok' || message.content.startsWith('!grok ')) {
+    const parts = message.content.split(/\s+/).filter(Boolean);
+    const sub = (parts[1] || 'status').toLowerCase();
+
+    if (sub === 'status' || sub === 'whoami') {
+      const st = grokOAuthStatus();
+      const src = grokAuthSource();
+      const current = getCurrentModel();
+      const exp = st.expiresAt
+        ? new Date(st.expiresAt).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })
+        : 'n/a';
+      await message.channel.send(
+        `**Grok auth:** ${src}\n${st.hint}\nExpires (São Paulo): ${exp}\nEnv key fallback: **${process.env.XAI_API_KEY?.trim() ? 'yes' : 'no'}**\nCurrent brain: **${current.id}** (${current.provider})\n\n\`!grok login\` · \`!grok logout\` · \`!model grok grok-4.6\``
+      );
+      return;
+    }
+
+    if (sub === 'logout') {
+      await message.channel.send(grokOAuthLogout());
+      return;
+    }
+
+    if (sub === 'login') {
+      if (grokLoginBusy) {
+        await message.channel.send('Grok login already in progress. Finish that one first.');
+        return;
+      }
+      grokLoginBusy = true;
+      try {
+        const device = await requestGrokDeviceCode();
+        const url = device.verification_uri_complete || device.verification_uri;
+        const wait = await message.channel.send(
+          `**Grok OAuth** (SuperGrok / X Premium — same flow as OpenCode / Hermes)\n\n1. Open: ${url}\n2. Confirm code: **${device.user_code}**\n\nI'll wait here until you authorize (a few minutes). Don't run this twice.`
+        );
+        await pollGrokDeviceToken(device);
+        await wait.edit(
+          `Grok OAuth **ok**. Session saved (gitignored).\nSwitch with \`!model grok grok-4.6\`.`
+        );
+      } catch (e) {
+        console.warn('[nova] grok login failed:', errDetail(e));
+        await message.channel.send(`Grok login failed: ${errDetail(e)}`);
+      } finally {
+        grokLoginBusy = false;
+      }
+      return;
+    }
+
+    await message.channel.send('Usage: `!grok login` · `!grok status` · `!grok logout`');
     return;
   }
 
   if (message.content.startsWith('!think') || message.content.startsWith('!reasoning')) {
     const parts = message.content.split(/\s+/).filter(Boolean);
+    const grokNote =
+      getCurrentModel().provider === 'grok'
+        ? ' On Grok, `off` maps to `low` (cannot disable) and `max` maps to `xhigh` on grok-4.6.'
+        : ' Official DeepSeek API only.';
     if (parts.length < 2) {
       await message.channel.send(
-        `DeepSeek thinking is **${getDeepSeekThink()}**.\nSet with \`!think off|low|high|max\` (official API only).`
+        `Thinking is **${getDeepSeekThink()}**.${grokNote}\nSet with \`!think off|low|high|max\`.`
       );
       return;
     }
@@ -286,7 +373,7 @@ ${unresolved}
 
   if (message.content === '!help') {
     await message.channel.send(
-      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model deepseek deepseek-v4-pro\`, \`!model deepseek deepseek-v4-flash\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`. Type \`!model\` for the full list.\n\`!think off|low|high|max\` - DeepSeek official API thinking (off = no CoT). Alias: \`!reasoning\`.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!compress_3d\` - Distills Nova_3D.md in place (keeps Nova_3D.bak.md).\n\`!now\` - Shows the hot-state vignette injected this turn.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
+      `**Nova's Brain Commands** 🧠\n\`!model <provider> <id>\` - Switches my current model. Examples: \`!model deepseek deepseek-v4-pro\`, \`!model grok grok-4.6\`, \`!model openrouter deepseek-v4-pro\`, \`!model nanogpt <id-from-nano-pro-roster>\`. Type \`!model\` for the full list.\n\`!grok login|status|logout\` - SuperGrok / X Premium OAuth (device code, same as OpenCode/Hermes). Optional fallback: \`XAI_API_KEY\`.\n\`!think off|low|high|max\` - DeepSeek thinking, or Grok reasoning effort. Alias: \`!reasoning\`.\n\`!draw [model=xxx] <prompt>\` - Draws using NanoGPT (subscription). Optional: \`!draw model=flux-pro cute neko\`\nNanoGPT models have web_search + web_fetch + image understanding.\n\`!toggle_auto\` - Enables/disables my autonomous cycles.\n\`!pack_week\` - Summarizes all our recent chats into the weekly file.\n\`!pack_forever\` - Compresses the week file into core lore.\n\`!compress_3d\` - Distills Nova_3D.md in place (keeps Nova_3D.bak.md).\n\`!now\` - Shows the hot-state vignette injected this turn.\n\`!export_brain\` - DMs you my memories so you can sync them!\nJust talk to me normally for everything else! 💕`
     );
     return;
   }
@@ -330,7 +417,7 @@ ${unresolved}
     let toolsHint = `[TOOLS]
 - recall_visual_canon(who: alice|nova|both): load appearance canon. Use ONLY when Alice asks for an image prompt, drawing prompt, visual description, or canon look. Do not use for ordinary chat.
 - recall_recent_inner_world: load recent diary/dreams/offscreen. Use only when you need more inner-world detail than [NOW].`;
-    if (provider === 'deepseek' || provider === 'nanogpt' || provider === 'openrouter') {
+    if (provider === 'deepseek' || provider === 'nanogpt' || provider === 'openrouter' || provider === 'grok') {
       toolsHint +=
         '\n- web_search: look up current facts, news, dates, or anything you do not already know. Use when needed, not for ordinary chat.';
     }

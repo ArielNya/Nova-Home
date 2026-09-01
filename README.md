@@ -32,6 +32,8 @@ GEMINI_API_KEY=your_google_ai_studio_key
 OPENROUTER_API_KEY=your_openrouter_key
 DEEPSEEK_API_KEY=your_deepseek_api_key
 NANOGPT_API_KEY=your_nanogpt_subscription_key
+# optional — Grok prefers !grok login (SuperGrok OAuth)
+XAI_API_KEY=
 
 # Channel Routing
 MAIN_CHANNEL_ID=1234567890
@@ -52,6 +54,24 @@ Switch with:
 !model deepseek deepseek-v4-flash-vision-exp
 ```
 (`!model deepseek` lists them. Vision model is the one that can see attached images.)
+
+## Using Grok (SuperGrok OAuth)
+Same device-code flow OpenCode and Hermes Agent use. No API key required if you have SuperGrok or X Premium.
+
+```
+!grok login
+```
+Open the URL, enter the code, wait for the bot to confirm. Session is stored in `grok-oauth.json` (gitignored). Then:
+
+```
+!model grok grok-4.6
+!model grok grok-4.5
+!model grok grok-4
+!model grok grok-build-0.1
+```
+(`!model grok` lists them. Other `grok-*` ids are accepted.)
+
+`!grok status` / `!grok logout`. Optional fallback: `XAI_API_KEY` in `.env` if OAuth returns 403 (xAI sometimes gates the OAuth API surface by tier).
 
 ## Using NanoGPT models
 Add your subscription key as `NANOGPT_API_KEY`.

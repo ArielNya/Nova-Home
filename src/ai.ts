@@ -8,6 +8,7 @@ import {
   buildChatMessagesFromNovaPrompt,
   type NovaPrompt,
 } from './prompt_shape';
+import { getGrokAccessToken } from './grok_oauth';
 
 export type PromptInput = string | any[] | NovaPrompt;
 
@@ -52,7 +53,15 @@ function getDeepSeekClient() {
   return deepseekClient;
 }
 
-export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek';
+async function getGrokClient() {
+  const apiKey = await getGrokAccessToken();
+  return new OpenAI({
+    baseURL: 'https://api.x.ai/v1',
+    apiKey,
+  });
+}
+
+export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek' | 'grok';
 export type ThinkLevel = 'off' | 'low' | 'high' | 'max';
 
 interface ModelConfig {
@@ -69,6 +78,15 @@ export const DEEPSEEK_MODELS = [
 ] as const;
 
 export const DEEPSEEK_VISION_MODEL = 'deepseek-v4-flash-vision-exp';
+
+export const GROK_MODELS = ['grok-4.6', 'grok-4.5', 'grok-4', 'grok-build-0.1'] as const;
+
+export function isGrokModelId(id: string): boolean {
+  const s = id.trim();
+  if (!s) return false;
+  if ((GROK_MODELS as readonly string[]).includes(s)) return true;
+  return /^grok[-.]/i.test(s);
+}
 
 let currentModel: ModelConfig = { id: 'gemma-4-31b-it', provider: 'gemini' };
 
@@ -136,6 +154,16 @@ function deepseekThinkOptions(model: ModelConfig, isConversation: boolean) {
 function deepseekReasoning(model: ModelConfig, isConversation: boolean) {
   const level = model.think ?? (isConversation ? deepseekThink : 'low');
   return { reasoning: { effort: level === 'off' ? 'none' : level } };
+}
+
+/** xAI grok-4.6/4.5: low | medium | high | xhigh. Cannot disable. */
+function grokReasoning(model: ModelConfig, isConversation: boolean) {
+  const level = model.think ?? (isConversation ? deepseekThink : 'low');
+  const id = (model.id || '').toLowerCase();
+  let effort = 'high';
+  if (level === 'off' || level === 'low') effort = 'low';
+  else if (level === 'max') effort = id.includes('4.6') ? 'xhigh' : 'high';
+  return { reasoning: { effort } };
 }
 
 export const TASK_MODELS: ModelConfig[] = [
@@ -510,7 +538,7 @@ function extractResponsesText(resp: any): string {
   return parts.join('\n');
 }
 
-function logDeepSeekUsage(resp: any) {
+function logResponsesUsage(resp: any, label: string) {
   const u = resp?.usage || {};
   const cached =
     u.input_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0;
@@ -518,24 +546,25 @@ function logDeepSeekUsage(resp: any) {
   const outTok = u.output_tokens ?? u.completion_tokens ?? '?';
   const think = u.output_tokens_details?.reasoning_tokens ?? u.reasoning_tokens;
   const thinkBit = think != null ? `  think=${think}` : '';
-  console.log(`[nova] deepseek tokens  in=${inTok} cached=${cached} out=${outTok}${thinkBit}`);
+  console.log(`[nova] ${label} tokens  in=${inTok} cached=${cached} out=${outTok}${thinkBit}`);
 }
 
-async function runDeepSeekResponsesLoop(
+async function runResponsesLoop(
   client: OpenAI,
   input: any[],
   tools: any[],
-  optionsBase: any
+  optionsBase: any,
+  label: string
 ): Promise<string> {
   const MAX_ROUNDS = 6;
   const toolNames = (tools || []).map((t: any) => t.name || t.type).join(', ') || 'none';
   const hasInstr = !!optionsBase.instructions;
   console.log(
-    `[nova] deepseek responses  model=${optionsBase.model}  tools=${toolNames}  instructions=${hasInstr ? optionsBase.instructions.length + 'c' : 'no'}  input_items=${input.length}`
+    `[nova] ${label} responses  model=${optionsBase.model}  tools=${toolNames}  instructions=${hasInstr ? optionsBase.instructions.length + 'c' : 'no'}  input_items=${input.length}`
   );
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    console.log(`[nova] deepseek round ${round + 1}/${MAX_ROUNDS}`);
+    console.log(`[nova] ${label} round ${round + 1}/${MAX_ROUNDS}`);
     const resp: any = await client.responses.create({
       ...optionsBase,
       input,
@@ -543,19 +572,19 @@ async function runDeepSeekResponsesLoop(
     });
 
     if (resp?.status === 'failed' || resp?.error) {
-      throw new Error(resp?.error?.message || 'DeepSeek Responses status=failed');
+      throw new Error(resp?.error?.message || `${label} Responses status=failed`);
     }
 
-    logDeepSeekUsage(resp);
+    logResponsesUsage(resp, label);
 
     const output: any[] = Array.isArray(resp?.output) ? resp.output : [];
     const types = output.map((i: any) => i?.type || '?').join(', ') || 'none';
-    console.log(`[nova] deepseek status=${resp?.status || '?'}  output=[${types}]`);
+    console.log(`[nova] ${label} status=${resp?.status || '?'}  output=[${types}]`);
 
     for (const item of output) {
       if (item?.type === 'web_search_call') {
         const q = item.action?.query || item.query || '';
-        console.log(`[nova] deepseek web_search${q ? ': ' + clip(String(q), 120) : ''}`);
+        console.log(`[nova] ${label} web_search${q ? ': ' + clip(String(q), 120) : ''}`);
       }
     }
 
@@ -563,15 +592,15 @@ async function runDeepSeekResponsesLoop(
     if (!functionCalls.length) {
       const text = extractResponsesText(resp);
       if (!text.trim()) {
-        console.warn('[nova] deepseek responses: empty reply');
+        console.warn(`[nova] ${label} responses: empty reply`);
       } else {
-        console.log(`[nova] deepseek done  ${text.length} chars`);
+        console.log(`[nova] ${label} done  ${text.length} chars`);
       }
       return text;
     }
 
     console.log(
-      `[nova] deepseek wants functions: ${functionCalls.map((fc: any) => fc.name || '?').join(', ')}`
+      `[nova] ${label} wants functions: ${functionCalls.map((fc: any) => fc.name || '?').join(', ')}`
     );
     input.push(...output);
     for (const fc of functionCalls) {
@@ -589,7 +618,7 @@ async function runDeepSeekResponsesLoop(
       });
     }
   }
-  console.warn('[nova] deepseek responses: hit max rounds, no final text');
+  console.warn(`[nova] ${label} responses: hit max rounds, no final text`);
   return '';
 }
 
@@ -715,12 +744,12 @@ export async function generateContentWithFallback(
         const { instructions, input } = resolveDeepSeekPayload(prompt);
 
         try {
-          const text = await runDeepSeekResponsesLoop(client, input, deepseekTools, {
+          const text = await runResponsesLoop(client, input, deepseekTools, {
             model: modelId,
             temperature: 1.2,
             instructions: instructions || undefined,
             ...deepseekReasoning(modelConfig, isDefaultConversationRequest),
-          });
+          }, 'deepseek');
           console.log(`[nova] ok deepseek/${modelId}  ${text.length} chars`);
           return { text };
         } catch (e: any) {
@@ -735,6 +764,52 @@ export async function generateContentWithFallback(
             ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
           });
           console.log(`[nova] ok deepseek/${modelId} via chat-completions  ${text.length} chars`);
+          return { text };
+        }
+      }
+
+      // ==================== GROK (xAI — SuperGrok OAuth or XAI_API_KEY) ====================
+      else if (modelConfig.provider === 'grok') {
+        const client = await getGrokClient();
+        const functionTools = convertToResponsesFunctionTools(tools);
+        const grokTools = isDefaultConversationRequest
+          ? [...functionTools, DEEPSEEK_WEB_SEARCH_TOOL]
+          : functionTools;
+        const { instructions, input } = resolveDeepSeekPayload(prompt);
+
+        try {
+          const text = await runResponsesLoop(
+            client,
+            input,
+            grokTools,
+            {
+              model: modelConfig.id,
+              temperature: 1.2,
+              instructions: instructions || undefined,
+              ...grokReasoning(modelConfig, isDefaultConversationRequest),
+            },
+            'grok'
+          );
+          console.log(`[nova] ok grok/${modelConfig.id}  ${text.length} chars`);
+          return { text };
+        } catch (e: any) {
+          const detail = errDetail(e);
+          if (/\b403\b/.test(detail)) {
+            console.warn(
+              '[nova] grok 403 — SuperGrok OAuth may be tier-gated. Set XAI_API_KEY as fallback.'
+            );
+            throw e;
+          }
+          console.warn(`[nova] grok responses failed (${detail}) — retrying chat completions`);
+          const messages = toChatMessages(prompt);
+          const chatTools = convertToStandardTools(tools);
+          const grokEffort = grokReasoning(modelConfig, isDefaultConversationRequest).reasoning.effort;
+          const text = await runOpenAIToolLoop(client, messages, {
+            model: modelConfig.id,
+            tools: chatTools.length > 0 ? chatTools : undefined,
+            reasoning_effort: grokEffort,
+          });
+          console.log(`[nova] ok grok/${modelConfig.id} via chat-completions  ${text.length} chars`);
           return { text };
         }
       }
