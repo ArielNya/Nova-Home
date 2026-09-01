@@ -73,6 +73,8 @@ Open the URL, enter the code, wait for the bot to confirm. Session is stored in 
 
 `!grok status` / `!grok logout`. Optional fallback: `XAI_API_KEY` in `.env` if OAuth returns 403 (xAI sometimes gates the OAuth API surface by tier).
 
+Grok chat is **stateful** (xAI stores the thread 30 days). First message after login/pack/model-switch sends full 3D+week; later turns only send the new message via `previous_response_id`. Cheaper than resending DeepSeek-style context every time. Session id: `grok-session.json` (gitignored).
+
 ## Using NanoGPT models
 Add your subscription key as `NANOGPT_API_KEY`.
 

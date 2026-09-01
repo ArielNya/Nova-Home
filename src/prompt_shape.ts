@@ -69,6 +69,21 @@ function lastUserText(p: NovaPrompt): string {
   return parts.join('\n\n');
 }
 
+function lastUserMessage(p: NovaPrompt, text: string, withImages: boolean): any {
+  const images = withImages ? p.images || [] : [];
+  if (!images.length) return { role: 'user', content: text };
+  const content: any[] = [{ type: 'input_text', text }];
+  for (const img of images) {
+    const httpUrl = img.url && /^https?:\/\//i.test(img.url) ? img.url : '';
+    if (httpUrl) {
+      content.push({ type: 'input_image', image_url: httpUrl });
+    } else {
+      console.warn('[nova] skip image for responses: need an http url (data urls are too big)');
+    }
+  }
+  return { role: 'user', content };
+}
+
 export function buildDeepSeekPayload(p: NovaPrompt): { instructions: string; input: any[] } {
   const instructions = [p.instructions, p.toolsHint].filter(Boolean).join('\n\n');
   const input: any[] = [];
@@ -86,24 +101,14 @@ export function buildDeepSeekPayload(p: NovaPrompt): { instructions: string; inp
     }
   }
 
-  const text = lastUserText(p);
-  const images = p.images || [];
-  if (!images.length) {
-    input.push({ role: 'user', content: text });
-  } else {
-    const content: any[] = [{ type: 'input_text', text }];
-    for (const img of images) {
-      const httpUrl = img.url && /^https?:\/\//i.test(img.url) ? img.url : '';
-      if (httpUrl) {
-        content.push({ type: 'input_image', image_url: httpUrl });
-      } else {
-        console.warn('[nova] skip image for deepseek: need an http url (data urls are too big)');
-      }
-    }
-    input.push({ role: 'user', content });
-  }
-
+  input.push(lastUserMessage(p, lastUserText(p), true));
   return { instructions, input };
+}
+
+/** Grok stored-chain follow-up: only the new turn (or tool result). Do not resend 3D/week/history. */
+export function buildGrokFollowUpInput(p: NovaPrompt): any[] {
+  if (p.toolResult) return [lastUserMessage(p, p.toolResult, false)];
+  return [lastUserMessage(p, lastUserText(p), true)];
 }
 
 export function buildChatMessagesFromNovaPrompt(p: NovaPrompt): any[] {

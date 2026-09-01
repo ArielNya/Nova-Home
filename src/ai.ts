@@ -5,10 +5,14 @@ import {
   isNovaPrompt,
   flattenNovaPrompt,
   buildDeepSeekPayload,
+  buildGrokFollowUpInput,
   buildChatMessagesFromNovaPrompt,
   type NovaPrompt,
 } from './prompt_shape';
 import { getGrokAccessToken } from './grok_oauth';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
 
 export type PromptInput = string | any[] | NovaPrompt;
 
@@ -164,6 +168,83 @@ function grokReasoning(model: ModelConfig, isConversation: boolean) {
   if (level === 'off' || level === 'low') effort = 'low';
   else if (level === 'max') effort = id.includes('4.6') ? 'xhigh' : 'high';
   return { reasoning: { effort } };
+}
+
+type GrokChain = {
+  responseId: string;
+  modelId: string;
+  fingerprint: string;
+};
+
+const GROK_SESSION_FILE = path.resolve(process.cwd(), 'grok-session.json');
+
+function loadGrokChain(): GrokChain | null {
+  try {
+    if (!fs.existsSync(GROK_SESSION_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(GROK_SESSION_FILE, 'utf8'));
+    if (!raw?.responseId || !raw?.modelId || !raw?.fingerprint) return null;
+    return {
+      responseId: String(raw.responseId),
+      modelId: String(raw.modelId),
+      fingerprint: String(raw.fingerprint),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveGrokChain(chain: GrokChain | null) {
+  try {
+    if (!chain) {
+      if (fs.existsSync(GROK_SESSION_FILE)) fs.unlinkSync(GROK_SESSION_FILE);
+      return;
+    }
+    fs.writeFileSync(
+      GROK_SESSION_FILE,
+      JSON.stringify({ ...chain, savedAt: new Date().toISOString() }, null, 2)
+    );
+    try {
+      fs.chmodSync(GROK_SESSION_FILE, 0o600);
+    } catch {
+      /* windows */
+    }
+  } catch (e) {
+    console.warn('[nova] grok chain: could not save session file:', (e as Error).message);
+  }
+}
+
+let grokChain: GrokChain | null = loadGrokChain();
+
+function grokFingerprint(p: NovaPrompt, modelId: string): string {
+  return crypto
+    .createHash('sha1')
+    .update(modelId)
+    .update('\n')
+    .update(p.instructions)
+    .update('\n')
+    .update(p.toolsHint)
+    .update('\n')
+    .update(p.memoryBlock)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function resetGrokChain(): void {
+  grokChain = null;
+  saveGrokChain(null);
+  console.log('[nova] grok chain cleared');
+}
+
+export function grokChainStatus(): string {
+  if (!grokChain) return 'no stored chain (next chat will seed full context)';
+  const id = grokChain.responseId;
+  const short = id.length > 22 ? id.slice(0, 20) + '…' : id;
+  return `chained  model=${grokChain.modelId}  resp=${short}`;
+}
+
+function isGrokChainError(e: unknown): boolean {
+  const d = errDetail(e).toLowerCase();
+  return /previous_response|previous response/.test(d);
 }
 
 export const TASK_MODELS: ModelConfig[] = [
@@ -554,26 +635,35 @@ async function runResponsesLoop(
   input: any[],
   tools: any[],
   optionsBase: any,
-  label: string
+  label: string,
+  chain?: { stateful?: boolean; onResponseId?: (id: string) => void }
 ): Promise<string> {
   const MAX_ROUNDS = 6;
   const toolNames = (tools || []).map((t: any) => t.name || t.type).join(', ') || 'none';
   const hasInstr = !!optionsBase.instructions;
+  const prev = optionsBase.previous_response_id
+    ? `  prev=${String(optionsBase.previous_response_id).slice(0, 20)}…`
+    : '';
   console.log(
-    `[nova] ${label} responses  model=${optionsBase.model}  tools=${toolNames}  instructions=${hasInstr ? optionsBase.instructions.length + 'c' : 'no'}  input_items=${input.length}`
+    `[nova] ${label} responses  model=${optionsBase.model}  tools=${toolNames}  instructions=${hasInstr ? optionsBase.instructions.length + 'c' : 'no'}  input_items=${input.length}${prev}`
   );
+
+  let opts = { ...optionsBase };
+  let roundInput = input;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     console.log(`[nova] ${label} round ${round + 1}/${MAX_ROUNDS}`);
     const resp: any = await client.responses.create({
-      ...optionsBase,
-      input,
+      ...opts,
+      input: roundInput,
       tools: tools.length ? tools : undefined,
     });
 
     if (resp?.status === 'failed' || resp?.error) {
       throw new Error(resp?.error?.message || `${label} Responses status=failed`);
     }
+
+    if (resp?.id && chain?.onResponseId) chain.onResponseId(String(resp.id));
 
     logResponsesUsage(resp, label);
 
@@ -602,7 +692,8 @@ async function runResponsesLoop(
     console.log(
       `[nova] ${label} wants functions: ${functionCalls.map((fc: any) => fc.name || '?').join(', ')}`
     );
-    input.push(...output);
+
+    const outputs: any[] = [];
     for (const fc of functionCalls) {
       let args: any = {};
       try {
@@ -611,11 +702,20 @@ async function runResponsesLoop(
         console.warn(`[nova] tool ${fc.name}: bad args json`);
       }
       const resultText = await executeTool(fc.name || '', args);
-      input.push({
+      outputs.push({
         type: 'function_call_output',
         call_id: fc.call_id,
         output: String(resultText),
       });
+    }
+
+    if (chain?.stateful && resp?.id) {
+      opts = { ...opts, previous_response_id: resp.id, instructions: undefined };
+      roundInput = outputs;
+      console.log(`[nova] ${label} chain tool round  prev=${String(resp.id).slice(0, 20)}…`);
+    } else {
+      roundInput = input;
+      input.push(...output, ...outputs);
     }
   }
   console.warn(`[nova] ${label} responses: hit max rounds, no final text`);
@@ -775,21 +875,75 @@ export async function generateContentWithFallback(
         const grokTools = isDefaultConversationRequest
           ? [...functionTools, DEEPSEEK_WEB_SEARCH_TOOL]
           : functionTools;
-        const { instructions, input } = resolveDeepSeekPayload(prompt);
 
-        try {
-          const text = await runResponsesLoop(
+        const useChain = isDefaultConversationRequest && isNovaPrompt(prompt);
+        const fp = useChain ? grokFingerprint(prompt, modelConfig.id) : '';
+        const canContinue = !!(
+          useChain &&
+          grokChain &&
+          grokChain.modelId === modelConfig.id &&
+          grokChain.fingerprint === fp &&
+          grokChain.responseId
+        );
+
+        const rememberId = (id: string) => {
+          if (!useChain) return;
+          grokChain = { responseId: id, modelId: modelConfig.id, fingerprint: fp };
+          saveGrokChain(grokChain);
+        };
+
+        const callGrok = async (mode: 'seed' | 'continue') => {
+          let instructions: string | undefined;
+          let input: any[];
+          let previous_response_id: string | undefined;
+
+          if (mode === 'continue' && grokChain) {
+            previous_response_id = grokChain.responseId;
+            input = buildGrokFollowUpInput(prompt as NovaPrompt);
+            instructions = undefined;
+            console.log(
+              `[nova] grok chain continue  prev=${previous_response_id.slice(0, 20)}…  delta=${input.length}`
+            );
+          } else {
+            const payload = resolveDeepSeekPayload(prompt);
+            instructions = payload.instructions;
+            input = payload.input;
+            previous_response_id = undefined;
+            if (useChain) console.log(`[nova] grok chain seed  items=${input.length}  fp=${fp}`);
+          }
+
+          return runResponsesLoop(
             client,
             input,
             grokTools,
             {
               model: modelConfig.id,
               temperature: 1.2,
-              instructions: instructions || undefined,
+              store: true,
+              ...(instructions ? { instructions } : {}),
+              ...(previous_response_id ? { previous_response_id } : {}),
               ...grokReasoning(modelConfig, isDefaultConversationRequest),
             },
-            'grok'
+            'grok',
+            { stateful: true, onResponseId: rememberId }
           );
+        };
+
+        try {
+          let text: string;
+          if (canContinue) {
+            try {
+              text = await callGrok('continue');
+            } catch (e: any) {
+              if (!isGrokChainError(e)) throw e;
+              console.warn(`[nova] grok chain miss (${errDetail(e)}) — reseeding full context`);
+              grokChain = null;
+              saveGrokChain(null);
+              text = await callGrok('seed');
+            }
+          } else {
+            text = await callGrok('seed');
+          }
           console.log(`[nova] ok grok/${modelConfig.id}  ${text.length} chars`);
           return { text };
         } catch (e: any) {
@@ -801,6 +955,8 @@ export async function generateContentWithFallback(
             throw e;
           }
           console.warn(`[nova] grok responses failed (${detail}) — retrying chat completions`);
+          grokChain = null;
+          saveGrokChain(null);
           const messages = toChatMessages(prompt);
           const chatTools = convertToStandardTools(tools);
           const grokEffort = grokReasoning(modelConfig, isDefaultConversationRequest).reasoning.effort;

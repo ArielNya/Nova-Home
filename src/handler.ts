@@ -10,6 +10,8 @@ import {
   getDeepSeekThink,
   setDeepSeekThink,
   errDetail,
+  resetGrokChain,
+  grokChainStatus,
   type Provider,
 } from './ai';
 import {
@@ -149,12 +151,13 @@ export async function handleIncomingMessage(message: Message) {
         ? new Date(st.expiresAt).toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })
         : 'n/a';
       await message.channel.send(
-        `**Grok auth:** ${src}\n${st.hint}\nExpires (São Paulo): ${exp}\nEnv key fallback: **${process.env.XAI_API_KEY?.trim() ? 'yes' : 'no'}**\nCurrent brain: **${current.id}** (${current.provider})\n\n\`!grok login\` · \`!grok logout\` · \`!model grok grok-4.6\``
+        `**Grok auth:** ${src}\n${st.hint}\nExpires (São Paulo): ${exp}\nEnv key fallback: **${process.env.XAI_API_KEY?.trim() ? 'yes' : 'no'}**\nContext: ${grokChainStatus()}\nCurrent brain: **${current.id}** (${current.provider})\n\n\`!grok login\` · \`!grok logout\` · \`!model grok grok-4.6\``
       );
       return;
     }
 
     if (sub === 'logout') {
+      resetGrokChain();
       await message.channel.send(grokOAuthLogout());
       return;
     }

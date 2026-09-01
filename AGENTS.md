@@ -72,6 +72,16 @@ Tasks (diário, sonho, pack, mood, offscreen) passam **string** + `TASK_MODELS`.
 
 Web search no DeepSeek: tool nativa `{ type: 'web_search' }`. **Não** googleSearch do Gemini no path DeepSeek. Gemini **não** auto-anexa search em todo turno de Discord.
 
+Grok **não** reenvia 3D/week/histórico todo turno. xAI Responses é stateful (`store: true` default, 30 dias):
+
+```
+seed      = mesmo dump do DeepSeek (instructions + 3D/week + history + [NOW])
+follow-up = previous_response_id + só o turno novo ([NOW] + msg + imagens)
+reset     = pack/compress, troca de modelo, !grok logout, ou a API recusar o id
+```
+
+Id da chain vive em `grok-session.json` (gitignored). DeepSeek continua stateless — **não** copia isso pra lá.
+
 ---
 
 ## Mapa do `src/`
@@ -142,7 +152,7 @@ Logs: prefixo `[nova]`, curtos, humanos. Tokens DeepSeek: `in= / cached= / out=`
 - Não cria helper pra operação de uma linha.
 - Não commita `.env`, `grok-oauth.json`, sqlite, ou os markdowns de memória pessoais.
 
-Secrets: `DISCORD_BOT_TOKEN`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `NANOGPT_API_KEY`, `XAI_API_KEY` (opcional). Só `.env`. Token de Grok OAuth vive em `grok-oauth.json` — **não commita**.
+Secrets: `DISCORD_BOT_TOKEN`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `NANOGPT_API_KEY`, `XAI_API_KEY` (opcional). Só `.env`. Token de Grok OAuth vive em `grok-oauth.json`; chain id em `grok-session.json` — **não commita**.
 
 Canais: `MAIN_CHANNEL_ID`, `DIARY_CHANNEL_ID`, `DREAMS_CHANNEL_ID`.
 
@@ -168,7 +178,7 @@ Conversa (Responses):
 
 NanoGPT: `web_search` + `web_fetch` client-side na sub dela.
 
-Grok (xAI): Responses + `{ type: 'web_search' }` nativa, mesmo shape do DeepSeek. Auth = `!grok login` (device code, client público do Grok CLI) ou `XAI_API_KEY`. 403 depois do login = gating de tier, não token podre — cai pra key se tiver.
+Grok (xAI): Responses stateful. Seed manda o dump completo (3D/week iguais). Turnos seguintes usam `previous_response_id` + delta. `{ type: 'web_search' }` nativa. Auth = `!grok login` ou `XAI_API_KEY`. 403 depois do login = gating de tier, não token podre — cai pra key se tiver. Chain file: `grok-session.json`.
 
 Gemini: só as function tools que a gente passa. Sem search automático.
 
