@@ -14,7 +14,7 @@ export class MemoryState {
       fs.accessSync(path.dirname(this.dbPath), fs.constants.W_OK);
     } catch {
       throw new Error(
-        `[🧠] Memory directory is not writable: ${path.dirname(this.dbPath)}. SQLite needs to create journal files there.`
+        `[\u{1f9e0}] Memory directory is not writable: ${path.dirname(this.dbPath)}. SQLite needs to create journal files there.`
       );
     }
 
@@ -22,7 +22,7 @@ export class MemoryState {
       try {
         fs.chmodSync(this.dbPath, 0o664);
       } catch (e) {
-        console.warn(`[🧠] Could not chmod ${this.dbPath}:`, e);
+        console.warn(`[\u{1f9e0}] Could not chmod ${this.dbPath}:`, e);
       }
     }
 
@@ -55,7 +55,7 @@ export class MemoryState {
       );
     `);
 
-    console.log(`[🧠] Nova: SQLite memory array engaged at ${this.dbPath}`);
+    console.log(`[\u{1f9e0}] Nova: SQLite memory array engaged at ${this.dbPath}`);
   }
 
   private isReadonlyError(e: unknown): boolean {
@@ -69,10 +69,10 @@ export class MemoryState {
       const dir = path.dirname(this.dbPath);
       const dst = fs.statSync(dir);
       console.error(
-        `[🧠] SQLITE_READONLY diag: path=${this.dbPath} file_mode=${(st.mode & 0o777).toString(8)} file_uid=${st.uid} dir_mode=${(dst.mode & 0o777).toString(8)} dir_uid=${dst.uid} pid_uid=${process.getuid?.()}`
+        `[\u{1f9e0}] SQLITE_READONLY diag: path=${this.dbPath} file_mode=${(st.mode & 0o777).toString(8)} file_uid=${st.uid} dir_mode=${(dst.mode & 0o777).toString(8)} dir_uid=${dst.uid} pid_uid=${process.getuid?.()}`
       );
     } catch (e) {
-      console.error('[🧠] SQLITE_READONLY diag failed:', e);
+      console.error('[\u{1f9e0}] SQLITE_READONLY diag failed:', e);
     }
   }
 
@@ -84,7 +84,7 @@ export class MemoryState {
       if (!this.isReadonlyError(e)) throw e;
       this.logReadonlyDiagnostics();
       console.warn(
-        '[🧠] SQLite went readonly — reopening (file may have been replaced while I was running).'
+        '[\u{1f9e0}] SQLite went readonly — reopening (file may have been replaced while I was running).'
       );
       await this.init();
       return await fn(this.db!);
@@ -94,18 +94,34 @@ export class MemoryState {
   async saveMessage(role: 'user' | 'model' | 'diary' | 'dream', content: string) {
     await this.withDb(async db => {
       await db.run(`INSERT INTO interactions (role, content) VALUES (?, ?)`, [role, content]);
-      await db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [
-        'last_interaction',
-        Date.now().toString(),
-      ]);
+      // Only Alice talking resets the "she's been gone" clock.
+      if (role === 'user') {
+        const now = Date.now().toString();
+        await db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [
+          'last_interaction',
+          now,
+        ]);
+        await db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [
+          'last_user_interaction',
+          now,
+        ]);
+      }
     });
   }
 
-  async getContext(limit: number = 20) {
+  async getContext(limit: number = 20, roles: string[] = ['user', 'model']) {
     return this.withDb(async db => {
+      if (!roles.length) {
+        const rows = await db.all(
+          `SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`,
+          [limit]
+        );
+        return rows.reverse();
+      }
+      const placeholders = roles.map(() => '?').join(',');
       const rows = await db.all(
-        `SELECT timestamp, role, content FROM interactions ORDER BY id DESC LIMIT ?`,
-        [limit]
+        `SELECT timestamp, role, content FROM interactions WHERE role IN (${placeholders}) ORDER BY id DESC LIMIT ?`,
+        [...roles, limit]
       );
       return rows.reverse();
     });
@@ -121,6 +137,39 @@ export class MemoryState {
   async setMeta(key: string, value: string) {
     await this.withDb(async db => {
       await db.run(`INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)`, [key, value]);
+    });
+  }
+
+  async hoursSinceMeta(key: string): Promise<number> {
+    const v = await this.getMeta(key);
+    if (!v) return 999;
+    const t = parseInt(v, 10);
+    if (Number.isNaN(t)) return 999;
+    return (Date.now() - t) / (1000 * 60 * 60);
+  }
+
+  async touchMetaNow(key: string) {
+    await this.setMeta(key, Date.now().toString());
+  }
+
+  /** Hours since Alice last sent a user message — ignores diary/dream/model writes. */
+  async hoursSinceAlice(): Promise<number> {
+    return this.withDb(async db => {
+      const meta = await db.get(`SELECT value FROM metadata WHERE key = ?`, [
+        'last_user_interaction',
+      ]);
+      if (meta?.value) {
+        const t = parseInt(meta.value, 10);
+        if (!Number.isNaN(t)) return (Date.now() - t) / (1000 * 60 * 60);
+      }
+      const row = await db.get(
+        `SELECT timestamp FROM interactions WHERE role = 'user' ORDER BY id DESC LIMIT 1`
+      );
+      if (!row?.timestamp) return 999;
+      const raw = String(row.timestamp);
+      const ms = Date.parse(/[zZ]|[+\-]\d{2}:?\d{2}$/.test(raw) ? raw : raw.replace(' ', 'T') + 'Z');
+      if (Number.isNaN(ms)) return 999;
+      return (Date.now() - ms) / (1000 * 60 * 60);
     });
   }
 

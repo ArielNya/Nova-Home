@@ -1,6 +1,20 @@
 // @ts-ignore - Bypass ESM/CommonJS restriction since the SDK natively supports both
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
+import {
+  isNovaPrompt,
+  flattenNovaPrompt,
+  buildDeepSeekPayload,
+  buildGrokFollowUpInput,
+  buildChatMessagesFromNovaPrompt,
+  type NovaPrompt,
+} from './prompt_shape';
+import { getGrokAccessToken } from './grok_oauth';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
+
+export type PromptInput = string | any[] | NovaPrompt;
 
 // Module-level NanoGPT client (subscription-only) for chat
 let nanoClient: OpenAI | null = null;
@@ -43,8 +57,17 @@ function getDeepSeekClient() {
   return deepseekClient;
 }
 
-export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek';
+async function getGrokClient() {
+  const apiKey = await getGrokAccessToken();
+  return new OpenAI({
+    baseURL: 'https://api.x.ai/v1',
+    apiKey,
+  });
+}
+
+export type Provider = 'gemini' | 'openrouter' | 'nanogpt' | 'deepseek' | 'grok';
 export type ThinkLevel = 'off' | 'low' | 'high' | 'max';
+export type GrokEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 interface ModelConfig {
   id: string;
@@ -58,6 +81,19 @@ export const DEEPSEEK_MODELS = [
   'deepseek-v4-pro',
   'deepseek-v4-flash-vision-exp',
 ] as const;
+
+export const DEEPSEEK_VISION_MODEL = 'deepseek-v4-flash-vision-exp';
+
+export const GROK_MODELS = ['grok-4.6', 'grok-4.5', 'grok-4', 'grok-build-0.1'] as const;
+
+export const GROK_IMAGINE_MODEL = 'grok-imagine-image-2.0';
+
+export function isGrokModelId(id: string): boolean {
+  const s = id.trim();
+  if (!s) return false;
+  if ((GROK_MODELS as readonly string[]).includes(s)) return true;
+  return /^grok[-.]/i.test(s);
+}
 
 let currentModel: ModelConfig = { id: 'gemma-4-31b-it', provider: 'gemini' };
 
@@ -112,6 +148,34 @@ export function setDeepSeekThink(level: string): string {
     : `DeepSeek reasoning effort set to **${next}**.`;
 }
 
+let grokEffort: GrokEffort = 'high';
+
+const GROK_EFFORT_ALIASES: Record<string, GrokEffort> = {
+  low: 'low',
+  medium: 'medium',
+  med: 'medium',
+  mid: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  'x-high': 'xhigh',
+  max: 'xhigh',
+  off: 'low',
+  none: 'low',
+};
+
+export function getGrokEffort(): GrokEffort {
+  return grokEffort;
+}
+
+export function setGrokEffort(level: string): string {
+  const next = GROK_EFFORT_ALIASES[level.toLowerCase()];
+  if (!next) {
+    return `Grok effort must be \`low\`, \`medium\`, \`high\`, or \`xhigh\`. Current: **${grokEffort}**`;
+  }
+  grokEffort = next;
+  return `Grok reasoning effort set to **${next}**. (4.5: low/medium/high — 4.6 also has xhigh; cannot turn off)`;
+}
+
 function deepseekThinkOptions(model: ModelConfig, isConversation: boolean) {
   const level = model.think ?? (isConversation ? deepseekThink : 'low');
   if (level === 'off') return { thinking: { type: 'disabled' as const } };
@@ -119,6 +183,139 @@ function deepseekThinkOptions(model: ModelConfig, isConversation: boolean) {
     thinking: { type: 'enabled' as const },
     reasoning_effort: level,
   };
+}
+
+/** Responses API reasoning.effort: none | low | high | max */
+function deepseekReasoning(model: ModelConfig, isConversation: boolean) {
+  const level = model.think ?? (isConversation ? deepseekThink : 'low');
+  return { reasoning: { effort: level === 'off' ? 'none' : level } };
+}
+
+/** xAI grok-4.6/4.5: low | medium | high | xhigh. Cannot disable. Default high. */
+function grokReasoning(_model: ModelConfig, isConversation: boolean) {
+  if (!isConversation) return { reasoning: { effort: 'low' as GrokEffort } };
+  const id = (_model.id || '').toLowerCase();
+  let effort: GrokEffort = grokEffort;
+  if (effort === 'xhigh' && !id.includes('4.6')) effort = 'high';
+  return { reasoning: { effort } };
+}
+
+/**
+ * Gemini API thinkingConfig.
+ * Gemma 4: high | minimal (on/off only).
+ * Gemini 3+: thinkingLevel minimal|low|medium|high.
+ * Gemini 2.5: thinkingBudget tokens.
+ * Gemini 1.5: no thinking knob — omit.
+ */
+function geminiThinkingConfig(model: ModelConfig, isConversation: boolean): { thinkingConfig: Record<string, unknown> } | undefined {
+  const id = (model.id || '').toLowerCase();
+  const level = model.think ?? (isConversation ? deepseekThink : 'low');
+
+  if (id.includes('gemma-4') || /^gemma-4/.test(id)) {
+    const thinkingLevel = level === 'off' || level === 'low' ? 'minimal' : 'high';
+    console.log(`[nova] gemini think  ${model.id}  thinkingLevel=${thinkingLevel}  (gemma on/off)`);
+    return { thinkingConfig: { thinkingLevel } };
+  }
+
+  if (id.includes('gemini-1.5') || id.includes('gemini-1.0')) {
+    return undefined;
+  }
+
+  if (id.includes('gemini-2.5')) {
+    const thinkingBudget =
+      level === 'off' ? 0 : level === 'low' ? 1024 : level === 'max' ? 24576 : 8192;
+    console.log(`[nova] gemini think  ${model.id}  thinkingBudget=${thinkingBudget}`);
+    return { thinkingConfig: { thinkingBudget } };
+  }
+
+  if (id.includes('gemini-')) {
+    const isPro = id.includes('pro') && !id.includes('flash');
+    let thinkingLevel = 'high';
+    if (level === 'off') thinkingLevel = isPro ? 'low' : 'minimal';
+    else if (level === 'low') thinkingLevel = 'low';
+    else if (level === 'max' || level === 'high') thinkingLevel = 'high';
+    console.log(`[nova] gemini think  ${model.id}  thinkingLevel=${thinkingLevel}`);
+    return { thinkingConfig: { thinkingLevel } };
+  }
+
+  return undefined;
+}
+
+type GrokChain = {
+  responseId: string;
+  modelId: string;
+  fingerprint: string;
+};
+
+const GROK_SESSION_FILE = path.resolve(process.cwd(), 'grok-session.json');
+
+function loadGrokChain(): GrokChain | null {
+  try {
+    if (!fs.existsSync(GROK_SESSION_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(GROK_SESSION_FILE, 'utf8'));
+    if (!raw?.responseId || !raw?.modelId || !raw?.fingerprint) return null;
+    return {
+      responseId: String(raw.responseId),
+      modelId: String(raw.modelId),
+      fingerprint: String(raw.fingerprint),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveGrokChain(chain: GrokChain | null) {
+  try {
+    if (!chain) {
+      if (fs.existsSync(GROK_SESSION_FILE)) fs.unlinkSync(GROK_SESSION_FILE);
+      return;
+    }
+    fs.writeFileSync(
+      GROK_SESSION_FILE,
+      JSON.stringify({ ...chain, savedAt: new Date().toISOString() }, null, 2)
+    );
+    try {
+      fs.chmodSync(GROK_SESSION_FILE, 0o600);
+    } catch {
+      /* windows */
+    }
+  } catch (e) {
+    console.warn('[nova] grok chain: could not save session file:', (e as Error).message);
+  }
+}
+
+let grokChain: GrokChain | null = loadGrokChain();
+
+function grokFingerprint(p: NovaPrompt, modelId: string): string {
+  return crypto
+    .createHash('sha1')
+    .update(modelId)
+    .update('\n')
+    .update(p.instructions)
+    .update('\n')
+    .update(p.toolsHint)
+    .update('\n')
+    .update(p.memoryBlock)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function resetGrokChain(): void {
+  grokChain = null;
+  saveGrokChain(null);
+  console.log('[nova] grok chain cleared');
+}
+
+export function grokChainStatus(): string {
+  if (!grokChain) return 'no stored chain (next chat will seed full context)';
+  const id = grokChain.responseId;
+  const short = id.length > 22 ? id.slice(0, 20) + '…' : id;
+  return `chained  model=${grokChain.modelId}  resp=${short}`;
+}
+
+function isGrokChainError(e: unknown): boolean {
+  const d = errDetail(e).toLowerCase();
+  return /previous_response|previous response/.test(d);
 }
 
 export const TASK_MODELS: ModelConfig[] = [
@@ -137,6 +334,118 @@ export function parseJsonFromLlm<T = any>(text: string): T {
   return JSON.parse(text.slice(start, end + 1));
 }
 
+export function errDetail(e: unknown): string {
+  const err = e as any;
+  const status = err?.status ?? err?.response?.status ?? err?.code;
+  const msg = err?.message || String(e);
+  const nested =
+    err?.error?.message ||
+    err?.response?.data?.error?.message ||
+    (typeof err?.error === 'string' ? err.error : '');
+  const bits: string[] = [];
+  if (status) bits.push(`status=${status}`);
+  bits.push(msg);
+  if (nested && nested !== msg) bits.push(nested);
+  return bits.join(' | ');
+}
+
+function clip(s: string, n = 100): string {
+  const t = String(s || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t.length > n ? t.slice(0, n) + '…' : t;
+}
+
+async function fetchModelCatalog(baseURL: string, apiKey: string): Promise<string[]> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const url = `${baseURL.replace(/\/$/, '')}/models`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: ctrl.signal,
+    });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const json: any = await res.json();
+    const rows = json.data || json.models || [];
+    const ids = rows.map((m: any) => String(m.id || m.name || m || '')).filter(Boolean);
+    return [...new Set(ids)].sort();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function formatHandleList(ids: string[], notes: Record<string, string>): string {
+  return ids
+    .map(id => {
+      const note = notes[id] ? ` — ${notes[id]}` : '';
+      return `\`${id}\`${note}`;
+    })
+    .join('\n');
+}
+
+const DEEPSEEK_HANDLE_NOTES: Record<string, string> = {
+  'deepseek-v4-flash': 'fast chat / tasks',
+  'deepseek-v4-pro': 'stronger chat',
+  'deepseek-v4-flash-vision-exp': 'only one that sees attached images',
+};
+
+const GROK_HANDLE_NOTES: Record<string, string> = {
+  'grok-4.6': 'flagship. effort: low medium high xhigh',
+  'grok-4.5': 'previous flagship. effort: low medium high',
+  'grok-4': 'older chat',
+  'grok-build-0.1': 'coding / grok build',
+  'grok-imagine-image-2.0': 'default !draw',
+};
+
+export async function listProviderModels(which: 'deepseek' | 'grok' | 'both' = 'both'): Promise<string> {
+  const chunks: string[] = [];
+
+  if (which === 'deepseek' || which === 'both') {
+    const key = (process.env.DEEPSEEK_API_KEY || '').trim();
+    let ids: string[] = [...DEEPSEEK_MODELS];
+    let source = 'known handles';
+    if (key) {
+      try {
+        const live = await fetchModelCatalog('https://api.deepseek.com', key);
+        if (live.length) {
+          ids = [...new Set([...live, ...DEEPSEEK_MODELS])].sort();
+          source = 'live GET /models + known handles';
+        }
+      } catch (e) {
+        console.warn('[nova] models deepseek live catalog failed:', errDetail(e));
+      }
+    }
+    chunks.push(
+      `**DeepSeek** (official API — ${source})\n${formatHandleList(ids, DEEPSEEK_HANDLE_NOTES)}\n\nswitch: \`!model deepseek <id>\`\nthinking: \`!think off|low|high|max\``
+    );
+  }
+
+  if (which === 'grok' || which === 'both') {
+    let ids: string[] = [...GROK_MODELS, GROK_IMAGINE_MODEL];
+    let source = 'known handles';
+    try {
+      const token = await getGrokAccessToken();
+      const live = await fetchModelCatalog('https://api.x.ai/v1', token);
+      if (live.length) {
+        ids = [...new Set([...live, ...GROK_MODELS, GROK_IMAGINE_MODEL])].sort();
+        source = 'live GET /models + known handles';
+      }
+    } catch (e) {
+      console.warn('[nova] models grok live catalog failed:', errDetail(e));
+    }
+    const chat = ids.filter(id => !/imagine|image|video|tts|voice|audio/i.test(id));
+    const media = ids.filter(id => /imagine|image|video|tts|voice|audio/i.test(id));
+    let body = `**Grok** (xAI — ${source})\n`;
+    if (chat.length) body += `chat:\n${formatHandleList(chat, GROK_HANDLE_NOTES)}\n`;
+    if (media.length) body += `\nimagine / media:\n${formatHandleList(media, GROK_HANDLE_NOTES)}\n`;
+    body += `\nswitch: \`!model grok <id>\`\neffort (4.5/4.6): \`!effort low|medium|high|xhigh\`  now **${grokEffort}**\ndraw: \`!draw <prompt>\` → \`${GROK_IMAGINE_MODEL}\``;
+    chunks.push(body);
+  }
+
+  return chunks.join('\n\n');
+}
+
 // ==================== TOOL HELPERS ====================
 
 function getOpenRouterTools(tools: any[] = []) {
@@ -150,20 +459,9 @@ function getOpenRouterTools(tools: any[] = []) {
   return finalTools;
 }
 
-function getGeminiTools(
-  modelId: string,
-  tools: any[] | undefined,
-  isDefaultConversationRequest: boolean
-) {
-  const geminiTools = [...(tools || [])];
-  const hasGoogleSearch = geminiTools.some(tool => 'googleSearch' in tool);
-
-  // Always try to enable googleSearch for Gemini models (especially Gemma)
-  if (!hasGoogleSearch && isDefaultConversationRequest) {
-    geminiTools.push({ googleSearch: {} });
-  }
-
-  return geminiTools;
+function getGeminiTools(tools: any[] | undefined) {
+  // Don't auto-attach googleSearch on every Discord turn.
+  return [...(tools || [])];
 }
 
 // ==================== NANOGPT WEB TOOLS (client-side, using your subscription) ====================
@@ -269,17 +567,33 @@ async function performWebFetch(url: string): Promise<string> {
 }
 
 async function executeTool(name: string, args: any = {}): Promise<string> {
+  const argHint =
+    args?.query || args?.q || args?.who || args?.subject || args?.url || '';
+  console.log(`[nova] tool ${name}${argHint ? ` (${clip(String(argHint), 80)})` : ''}`);
+
   if (name === 'recall_recent_inner_world' || name === 'recall_my_recent_inner_world') {
-    // Dynamic import avoids init cycle (inner_world -> offscreen -> ai)
     const mod = await import('./inner_world.js');
-    return mod.getFullRecentInnerWorld();
+    const out = mod.getFullRecentInnerWorld();
+    console.log(`[nova] tool ${name} → ${String(out).length} chars`);
+    return out;
+  }
+  if (name === 'recall_visual_canon' || name === 'recall_appearance') {
+    const mod = await import('./appearance.js');
+    const out = mod.getVisualCanon(args.who || args.subject || 'both');
+    console.log(`[nova] tool ${name} who=${args.who || args.subject || 'both'} → ${out.length} chars`);
+    return out;
   }
   if (name === 'web_search') {
-    return performWebSearch(args.query || args.q || '');
+    const out = await performWebSearch(args.query || args.q || '');
+    console.log(`[nova] tool web_search → ${out.length} chars`);
+    return out;
   }
   if (name === 'web_fetch') {
-    return performWebFetch(args.url || '');
+    const out = await performWebFetch(args.url || '');
+    console.log(`[nova] tool web_fetch → ${out.length} chars`);
+    return out;
   }
+  console.warn(`[nova] unknown tool: ${name}`);
   return `Unknown tool: ${name}`;
 }
 
@@ -300,6 +614,27 @@ function convertToStandardTools(tools: any[] = []): any[] {
   });
 }
 
+/** Flatten Gemini-style {name, description, parameters} into Responses API function tools. */
+function convertToResponsesFunctionTools(tools: any[] = []): any[] {
+  return tools
+    .map(t => {
+      if (t?.type === 'web_search' || t?.type === 'web_search_2025_08_26') {
+        return { type: t.type };
+      }
+      const name = t?.function?.name || t?.name;
+      if (!name) return null;
+      return {
+        type: 'function',
+        name,
+        description: t?.function?.description || t?.description || '',
+        parameters: t?.function?.parameters || t?.parameters || { type: 'object', properties: {} },
+      };
+    })
+    .filter(Boolean);
+}
+
+const DEEPSEEK_WEB_SEARCH_TOOL = { type: 'web_search' as const };
+
 async function runOpenAIToolLoop(
   client: OpenAI,
   messages: any[],
@@ -307,17 +642,24 @@ async function runOpenAIToolLoop(
 ): Promise<string> {
   const MAX_ROUNDS = 4;
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    console.log(
+      `[nova] chat-completions round ${round + 1}/${MAX_ROUNDS}  model=${optionsBase.model}`
+    );
     const resp = await client.chat.completions.create({
       ...optionsBase,
       messages,
     });
 
     const msg: any = resp.choices[0]?.message;
-    if (!msg) break;
+    if (!msg) {
+      console.warn('[nova] chat-completions: empty message');
+      break;
+    }
 
     const toolCalls = msg.tool_calls;
     if (toolCalls && toolCalls.length > 0) {
-      // Keep the raw assistant message (DeepSeek needs reasoning_content on tool turns)
+      const names = toolCalls.map((tc: any) => tc.function?.name || tc.name || '?').join(', ');
+      console.log(`[nova] chat-completions wants tools: ${names}`);
       messages.push(msg);
 
       for (const tc of toolCalls) {
@@ -326,7 +668,9 @@ async function runOpenAIToolLoop(
         let args: any = {};
         try {
           args = funcPart?.arguments ? JSON.parse(funcPart.arguments) : {};
-        } catch {}
+        } catch (e) {
+          console.warn(`[nova] tool ${name}: bad args json`);
+        }
         const resultText = await executeTool(name, args);
         messages.push({
           role: 'tool',
@@ -337,15 +681,212 @@ async function runOpenAIToolLoop(
       continue;
     }
 
-    return msg.content || '';
+    const text = msg.content || '';
+    if (!text.trim()) console.warn('[nova] chat-completions: empty text');
+    return text;
   }
+  console.warn('[nova] chat-completions: hit max rounds, no final text');
+  return '';
+}
+
+function promptHasImages(p: PromptInput): boolean {
+  if (isNovaPrompt(p)) return !!(p.images && p.images.length);
+  if (!Array.isArray(p)) return false;
+  return p.some(
+    (part: any) =>
+      part?.inlineData ||
+      part?.type === 'image_url' ||
+      part?.type === 'input_image' ||
+      part?.image_url
+  );
+}
+
+function buildResponsesInputFromPrompt(p: string | any[]): any[] {
+  if (typeof p === 'string') {
+    return [{ role: 'user', content: p }];
+  }
+  if (Array.isArray(p)) {
+    const content = p.map(part => {
+      if (part.text) return { type: 'input_text', text: part.text };
+      if (part.inlineData) {
+        return {
+          type: 'input_image',
+          image_url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+        };
+      }
+      return { type: 'input_text', text: JSON.stringify(part) };
+    });
+    return [{ role: 'user', content }];
+  }
+  return [{ role: 'user', content: '' }];
+}
+
+function resolveDeepSeekPayload(p: PromptInput): { instructions?: string; input: any[] } {
+  if (isNovaPrompt(p)) return buildDeepSeekPayload(p);
+  return { input: buildResponsesInputFromPrompt(p) };
+}
+
+function toGeminiContents(p: PromptInput): string | any[] {
+  if (isNovaPrompt(p)) {
+    const text = flattenNovaPrompt(p);
+    const images = p.images || [];
+    if (!images.length) return text;
+    return [
+      { text },
+      ...images.map(img => ({
+        inlineData: { mimeType: img.mimeType, data: img.data },
+      })),
+    ];
+  }
+  return p;
+}
+
+function toChatMessages(p: PromptInput): any[] {
+  if (isNovaPrompt(p)) return buildChatMessagesFromNovaPrompt(p);
+  return buildMessagesFromPrompt(p);
+}
+
+function buildMessagesFromPrompt(p: string | any[]): any[] {
+  if (typeof p === 'string') {
+    return [{ role: 'user', content: p }];
+  }
+  if (Array.isArray(p)) {
+    const content = p.map(part => {
+      if (part.text) return { type: 'text', text: part.text };
+      if (part.inlineData) {
+        return {
+          type: 'image_url',
+          image_url: {
+            url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
+          },
+        };
+      }
+      return { type: 'text', text: JSON.stringify(part) };
+    });
+    return [{ role: 'user', content }];
+  }
+  return [{ role: 'user', content: '' }];
+}
+
+function extractResponsesText(resp: any): string {
+  if (resp?.output_text) return String(resp.output_text);
+  const parts: string[] = [];
+  for (const item of resp?.output || []) {
+    if (item?.type !== 'message') continue;
+    for (const c of item.content || []) {
+      if (typeof c?.text === 'string') parts.push(c.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+function logResponsesUsage(resp: any, label: string) {
+  const u = resp?.usage || {};
+  const cached =
+    u.input_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cached_tokens ?? 0;
+  const inTok = u.input_tokens ?? u.prompt_tokens ?? '?';
+  const outTok = u.output_tokens ?? u.completion_tokens ?? '?';
+  const think = u.output_tokens_details?.reasoning_tokens ?? u.reasoning_tokens;
+  const thinkBit = think != null ? `  think=${think}` : '';
+  console.log(`[nova] ${label} tokens  in=${inTok} cached=${cached} out=${outTok}${thinkBit}`);
+}
+
+async function runResponsesLoop(
+  client: OpenAI,
+  input: any[],
+  tools: any[],
+  optionsBase: any,
+  label: string,
+  chain?: { stateful?: boolean; onResponseId?: (id: string) => void }
+): Promise<string> {
+  const MAX_ROUNDS = 6;
+  const toolNames = (tools || []).map((t: any) => t.name || t.type).join(', ') || 'none';
+  const hasInstr = !!optionsBase.instructions;
+  const prev = optionsBase.previous_response_id
+    ? `  prev=${String(optionsBase.previous_response_id).slice(0, 20)}…`
+    : '';
+  console.log(
+    `[nova] ${label} responses  model=${optionsBase.model}  tools=${toolNames}  instructions=${hasInstr ? optionsBase.instructions.length + 'c' : 'no'}  input_items=${input.length}${prev}`
+  );
+
+  let opts = { ...optionsBase };
+  let roundInput = input;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    console.log(`[nova] ${label} round ${round + 1}/${MAX_ROUNDS}`);
+    const resp: any = await client.responses.create({
+      ...opts,
+      input: roundInput,
+      tools: tools.length ? tools : undefined,
+    });
+
+    if (resp?.status === 'failed' || resp?.error) {
+      throw new Error(resp?.error?.message || `${label} Responses status=failed`);
+    }
+
+    if (resp?.id && chain?.onResponseId) chain.onResponseId(String(resp.id));
+
+    logResponsesUsage(resp, label);
+
+    const output: any[] = Array.isArray(resp?.output) ? resp.output : [];
+    const types = output.map((i: any) => i?.type || '?').join(', ') || 'none';
+    console.log(`[nova] ${label} status=${resp?.status || '?'}  output=[${types}]`);
+
+    for (const item of output) {
+      if (item?.type === 'web_search_call') {
+        const q = item.action?.query || item.query || '';
+        console.log(`[nova] ${label} web_search${q ? ': ' + clip(String(q), 120) : ''}`);
+      }
+    }
+
+    const functionCalls = output.filter((i: any) => i?.type === 'function_call');
+    if (!functionCalls.length) {
+      const text = extractResponsesText(resp);
+      if (!text.trim()) {
+        console.warn(`[nova] ${label} responses: empty reply`);
+      } else {
+        console.log(`[nova] ${label} done  ${text.length} chars`);
+      }
+      return text;
+    }
+
+    console.log(
+      `[nova] ${label} wants functions: ${functionCalls.map((fc: any) => fc.name || '?').join(', ')}`
+    );
+
+    const outputs: any[] = [];
+    for (const fc of functionCalls) {
+      let args: any = {};
+      try {
+        args = fc.arguments ? JSON.parse(fc.arguments) : {};
+      } catch {
+        console.warn(`[nova] tool ${fc.name}: bad args json`);
+      }
+      const resultText = await executeTool(fc.name || '', args);
+      outputs.push({
+        type: 'function_call_output',
+        call_id: fc.call_id,
+        output: String(resultText),
+      });
+    }
+
+    if (chain?.stateful && resp?.id) {
+      opts = { ...opts, previous_response_id: resp.id, instructions: undefined };
+      roundInput = outputs;
+      console.log(`[nova] ${label} chain tool round  prev=${String(resp.id).slice(0, 20)}…`);
+    } else {
+      roundInput = input;
+      input.push(...output, ...outputs);
+    }
+  }
+  console.warn(`[nova] ${label} responses: hit max rounds, no final text`);
   return '';
 }
 
 // ==================== MAIN GENERATION FUNCTION ====================
 
 export async function generateContentWithFallback(
-  prompt: string | any[],
+  prompt: PromptInput,
   tools: any[] = [],
   preferredModels?: ModelConfig[]
 ) {
@@ -374,61 +915,41 @@ export async function generateContentWithFallback(
       ? [...preferredModels, ...FALLBACK_MODELS]
       : [currentModel, ...FALLBACK_MODELS.filter(m => m.id !== currentModel.id)];
 
-  // Shared helper to turn our prompt (string or gemini-style parts) into OpenAI chat messages
-  function buildMessagesFromPrompt(p: string | any[]): any[] {
-    if (typeof p === 'string') {
-      return [{ role: 'user', content: p }];
-    }
-    if (Array.isArray(p)) {
-      const content = p.map(part => {
-        if (part.text) return { type: 'text', text: part.text };
-        if (part.inlineData) {
-          return {
-            type: 'image_url',
-            image_url: {
-              url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
-            },
-          };
-        }
-        return { type: 'text', text: JSON.stringify(part) };
-      });
-      return [{ role: 'user', content }];
-    }
-    return [{ role: 'user', content: '' }];
-  }
+  const first = modelsToTry[0];
+  const histHint = isNovaPrompt(prompt) ? `  history=${prompt.history.length}` : '';
+  console.log(
+    `[nova] gen ${isDefaultConversationRequest ? 'chat' : 'task'}  first=${first.provider}/${first.id}  images=${promptHasImages(prompt)}  tools=${(tools || []).map((t: any) => t.name || t.type).join(',') || 'none'}${histHint}`
+  );
 
   for (const modelConfig of modelsToTry) {
     try {
+      console.log(`[nova] trying ${modelConfig.provider}/${modelConfig.id}`);
       if (modelConfig.provider === 'gemini') {
         const g = getGemini();
-        const geminiTools = getGeminiTools(modelConfig.id, tools, isDefaultConversationRequest);
+        const geminiTools = getGeminiTools(tools);
 
         const geminiConfig: any = {
           temperature: 1.2,
           tools: geminiTools.length > 0 ? geminiTools : undefined,
+          ...geminiThinkingConfig(modelConfig, isDefaultConversationRequest),
         };
-
-        // Add high thinking level (helps with tool use / search quality)
-        if (isDefaultConversationRequest) {
-          geminiConfig.thinkingConfig = {
-            thinkingLevel: ThinkingLevel.HIGH,
-          };
-        }
 
         const options: any = {
           model: modelConfig.id,
           config: geminiConfig,
-          contents: prompt,
+          contents: toGeminiContents(prompt),
         };
 
         const response = await g.models.generateContent(options);
-        return { text: response.text };
+        const text = response.text || '';
+        console.log(`[nova] ok gemini/${modelConfig.id}  ${text.length} chars`);
+        return { text };
       }
 
       // ==================== OPENROUTER (DeepSeek, etc. — keep server tools behavior) ====================
       else if (modelConfig.provider === 'openrouter') {
         const client = getORClient();
-        const messages = buildMessagesFromPrompt(prompt);
+        const messages = toChatMessages(prompt);
         const openRouterTools = getOpenRouterTools(tools);
 
         const options: any = {
@@ -446,13 +967,15 @@ export async function generateContentWithFallback(
         }
 
         const response = await client.chat.completions.create(options);
-        return { text: response.choices[0]?.message?.content || '' };
+        const text = response.choices[0]?.message?.content || '';
+        console.log(`[nova] ok openrouter/${modelConfig.id}  ${text.length} chars`);
+        return { text };
       }
 
       // ==================== NANOGPT (any model from your Pro/sub roster) ====================
       else if (modelConfig.provider === 'nanogpt') {
         const client = getNanoClient();
-        const messages = buildMessagesFromPrompt(prompt);
+        const messages = toChatMessages(prompt);
         const nanoTools = [...convertToStandardTools(tools), ...NANO_GPT_WEB_TOOLS];
 
         const text = await runOpenAIToolLoop(client, messages, {
@@ -460,26 +983,156 @@ export async function generateContentWithFallback(
           temperature: 1.2,
           tools: nanoTools.length > 0 ? nanoTools : undefined,
         });
+        console.log(`[nova] ok nanogpt/${modelConfig.id}  ${text.length} chars`);
         return { text };
       }
 
-      // ==================== DEEPSEEK (official API) ====================
+      // ==================== DEEPSEEK (official API — Responses + native web_search) ====================
       else if (modelConfig.provider === 'deepseek') {
         const client = getDeepSeekClient();
-        const messages = buildMessagesFromPrompt(prompt);
-        const deepseekTools = convertToStandardTools(tools);
+        const functionTools = convertToResponsesFunctionTools(tools);
+        const deepseekTools = isDefaultConversationRequest
+          ? [...functionTools, DEEPSEEK_WEB_SEARCH_TOOL]
+          : functionTools;
 
-        const text = await runOpenAIToolLoop(client, messages, {
-          model: modelConfig.id,
-          tools: deepseekTools.length > 0 ? deepseekTools : undefined,
-          ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
-        });
-        return { text };
+        const modelId =
+          isDefaultConversationRequest && promptHasImages(prompt)
+            ? DEEPSEEK_VISION_MODEL
+            : modelConfig.id;
+        if (modelId !== modelConfig.id) {
+          console.log(`[nova] vision: image attached, using ${modelId} (default stays ${modelConfig.id})`);
+        }
+
+        const { instructions, input } = resolveDeepSeekPayload(prompt);
+
+        try {
+          const text = await runResponsesLoop(client, input, deepseekTools, {
+            model: modelId,
+            temperature: 1.2,
+            instructions: instructions || undefined,
+            ...deepseekReasoning(modelConfig, isDefaultConversationRequest),
+          }, 'deepseek');
+          console.log(`[nova] ok deepseek/${modelId}  ${text.length} chars`);
+          return { text };
+        } catch (e: any) {
+          console.warn(
+            `[nova] deepseek responses failed (${errDetail(e)}) — retrying chat completions, no native web_search`
+          );
+          const messages = toChatMessages(prompt);
+          const chatTools = convertToStandardTools(tools);
+          const text = await runOpenAIToolLoop(client, messages, {
+            model: modelId,
+            tools: chatTools.length > 0 ? chatTools : undefined,
+            ...deepseekThinkOptions(modelConfig, isDefaultConversationRequest),
+          });
+          console.log(`[nova] ok deepseek/${modelId} via chat-completions  ${text.length} chars`);
+          return { text };
+        }
+      }
+
+      // ==================== GROK (xAI — SuperGrok OAuth or XAI_API_KEY) ====================
+      else if (modelConfig.provider === 'grok') {
+        const client = await getGrokClient();
+        const functionTools = convertToResponsesFunctionTools(tools);
+        const grokTools = isDefaultConversationRequest
+          ? [...functionTools, DEEPSEEK_WEB_SEARCH_TOOL]
+          : functionTools;
+
+        const useChain = isDefaultConversationRequest && isNovaPrompt(prompt);
+        const fp = useChain ? grokFingerprint(prompt, modelConfig.id) : '';
+        const canContinue = !!(
+          useChain &&
+          grokChain &&
+          grokChain.modelId === modelConfig.id &&
+          grokChain.fingerprint === fp &&
+          grokChain.responseId
+        );
+
+        const rememberId = (id: string) => {
+          if (!useChain) return;
+          grokChain = { responseId: id, modelId: modelConfig.id, fingerprint: fp };
+          saveGrokChain(grokChain);
+        };
+
+        const callGrok = async (mode: 'seed' | 'continue') => {
+          let instructions: string | undefined;
+          let input: any[];
+          let previous_response_id: string | undefined;
+
+          if (mode === 'continue' && grokChain) {
+            previous_response_id = grokChain.responseId;
+            input = buildGrokFollowUpInput(prompt as NovaPrompt);
+            instructions = undefined;
+            console.log(
+              `[nova] grok chain continue  prev=${previous_response_id.slice(0, 20)}…  delta=${input.length}`
+            );
+          } else {
+            const payload = resolveDeepSeekPayload(prompt);
+            instructions = payload.instructions;
+            input = payload.input;
+            previous_response_id = undefined;
+            if (useChain) console.log(`[nova] grok chain seed  items=${input.length}  fp=${fp}`);
+          }
+
+          return runResponsesLoop(
+            client,
+            input,
+            grokTools,
+            {
+              model: modelConfig.id,
+              temperature: 1.2,
+              store: true,
+              ...(instructions ? { instructions } : {}),
+              ...(previous_response_id ? { previous_response_id } : {}),
+              ...grokReasoning(modelConfig, isDefaultConversationRequest),
+            },
+            'grok',
+            { stateful: true, onResponseId: rememberId }
+          );
+        };
+
+        try {
+          let text: string;
+          if (canContinue) {
+            try {
+              text = await callGrok('continue');
+            } catch (e: any) {
+              if (!isGrokChainError(e)) throw e;
+              console.warn(`[nova] grok chain miss (${errDetail(e)}) — reseeding full context`);
+              grokChain = null;
+              saveGrokChain(null);
+              text = await callGrok('seed');
+            }
+          } else {
+            text = await callGrok('seed');
+          }
+          console.log(`[nova] ok grok/${modelConfig.id}  ${text.length} chars`);
+          return { text };
+        } catch (e: any) {
+          const detail = errDetail(e);
+          if (/\b403\b/.test(detail)) {
+            console.warn(
+              '[nova] grok 403 — SuperGrok OAuth may be tier-gated. Set XAI_API_KEY as fallback.'
+            );
+            throw e;
+          }
+          console.warn(`[nova] grok responses failed (${detail}) — retrying chat completions`);
+          grokChain = null;
+          saveGrokChain(null);
+          const messages = toChatMessages(prompt);
+          const chatTools = convertToStandardTools(tools);
+          const grokEffort = grokReasoning(modelConfig, isDefaultConversationRequest).reasoning.effort;
+          const text = await runOpenAIToolLoop(client, messages, {
+            model: modelConfig.id,
+            tools: chatTools.length > 0 ? chatTools : undefined,
+            reasoning_effort: grokEffort,
+          });
+          console.log(`[nova] ok grok/${modelConfig.id} via chat-completions  ${text.length} chars`);
+          return { text };
+        }
       }
     } catch (e: any) {
-      console.log(
-        `[⚠️] Model ${modelConfig.id} failed (${e.status || e.message || 'unknown error'}). Falling back...`
-      );
+      console.warn(`[nova] ${modelConfig.provider}/${modelConfig.id} failed: ${errDetail(e)}`);
       if (modelConfig === modelsToTry[modelsToTry.length - 1]) throw e;
     }
   }
@@ -487,32 +1140,60 @@ export async function generateContentWithFallback(
   throw new Error('All fallback models failed.');
 }
 
-// ==================== NANOGPT IMAGE GENERATION (replaces AI Horde) ====================
-// Uses the subscription-only path so only roster-included image models are available.
-// Always returns a Buffer (b64_json) so handler can attach directly.
+// ==================== IMAGE GENERATION ====================
+// Default: Grok Imagine (xAI). NanoGPT is opt-in via !draw nano / model=flux-*.
 
-export async function generateImage(prompt: string, model?: string): Promise<Buffer> {
+export type DrawProvider = 'grok' | 'nano';
+
+async function bufferFromImageResponse(response: any, label: string): Promise<Buffer> {
+  const data = response?.data;
+  if (!data || !data[0]) throw new Error(`${label} did not return image data`);
+  const first = data[0];
+  if (first.b64_json) return Buffer.from(first.b64_json, 'base64');
+  if (first.url) {
+    const res = await fetch(first.url);
+    if (!res.ok) throw new Error(`${label} image url fetch failed (${res.status})`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  throw new Error(`${label} did not return b64_json or url`);
+}
+
+async function generateGrokImage(prompt: string, model?: string): Promise<Buffer> {
+  const client = await getGrokClient();
+  const id = model || GROK_IMAGINE_MODEL;
+  console.log(`[nova] draw grok/${id}  "${clip(prompt, 80)}"`);
+  const response: any = await client.images.generate({
+    model: id,
+    prompt,
+    n: 1,
+    response_format: 'b64_json',
+  } as any);
+  return bufferFromImageResponse(response, `Grok Imagine (${id})`);
+}
+
+async function generateNanoImage(prompt: string, model?: string): Promise<Buffer> {
   const client = getNanoImageClient();
-  // Keep the exact anime-style enhancement that was used with Horde
   const enhancedPrompt = prompt + ', high quality anime style digital art, highly detailed';
-
+  console.log(`[nova] draw nano/${model || 'default'}  "${clip(prompt, 80)}"`);
   const response = await client.images.generate({
-    // model from your subscription roster, e.g. "chroma", "hidream", "flux-pro" etc.
     ...(model ? { model } : {}),
     prompt: enhancedPrompt,
     n: 1,
     size: '1024x1024',
     response_format: 'b64_json',
   });
+  return bufferFromImageResponse(response, 'NanoGPT');
+}
 
-  const data = response.data;
-  if (!data || !data[0]) {
-    throw new Error('NanoGPT did not return image data');
-  }
-  const b64 = data[0].b64_json;
-  if (!b64) {
-    throw new Error('NanoGPT did not return image data (b64_json)');
-  }
+export async function generateImage(
+  prompt: string,
+  opts?: string | { model?: string; provider?: DrawProvider }
+): Promise<Buffer> {
+  const parsed = typeof opts === 'string' ? { model: opts } : opts || {};
+  const model = parsed.model;
+  let provider: DrawProvider = parsed.provider || 'grok';
+  if (!parsed.provider && model && !/^grok/i.test(model)) provider = 'nano';
 
-  return Buffer.from(b64, 'base64');
+  if (provider === 'nano') return generateNanoImage(prompt, model);
+  return generateGrokImage(prompt, model);
 }
